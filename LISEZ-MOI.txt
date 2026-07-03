@@ -1,0 +1,46 @@
+BGS — Gestion de trésorerie
+==============================
+
+MISE EN PLACE (une seule fois)
+--------------------------------
+
+1. Déployer sur Netlify
+   → Netlify → votre site → Deploys → glisser tout le contenu de ce dossier
+
+2. Ouvrir l'app et se connecter
+   → Choisir "Se connecter à Google Drive"
+   → Entrer votre ID client OAuth Google
+   → Laisser "ID fichier" vide (créé automatiquement)
+   → Se connecter avec votre compte Gmail
+
+3. Générer la configuration
+   → L'app affiche l'ID du fichier BGS créé
+   → Cliquer "Générer l'app pré-configurée"
+   → Un fichier "bgs-config.js" est téléchargé
+
+4. Déployer la configuration
+   → Netlify → votre site → Deploys
+   → Glisser UNIQUEMENT ce fichier "bgs-config.js"
+   → C'est fini ! Plus jamais d'ID à saisir.
+
+DONNER ACCÈS À UN UTILISATEUR
+-------------------------------
+
+A) Google Drive → clic droit sur "BGS-tresorerie-data.json"
+   → Partager → ajouter le Gmail de l'utilisateur
+
+B) Dans l'app → menu Compte → "Accès consultation client"
+   → Créer nom d'utilisateur + mot de passe
+   → Cocher les sections autorisées
+
+C) Transmettre à l'utilisateur :
+   → Lien : https://illustrious-biscochitos-a39f0e.netlify.app
+   → Son nom d'utilisateur + mot de passe BGS
+
+CONNEXION (après configuration)
+---------------------------------
+→ Ouvrir le lien
+→ Cliquer "Se connecter avec Google"
+→ Choisir son compte Gmail
+→ Entrer nom d'utilisateur + mot de passe BGS
+→ C'est tout !

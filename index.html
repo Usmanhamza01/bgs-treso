@@ -1,0 +1,1938 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>BGS — Gestion de trésorerie</title>
+<meta name="theme-color" content="#1F4D3F">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="BGS Trésorerie">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="icon" href="icons/icon-192.png">
+<style>
+  html, body { margin:0; padding:0; height:100%; background:#EEF2EC; }
+  .bgs-app { min-height:100vh !important; border-radius:0 !important; border:none !important; }
+</style>
+</head>
+<body>
+
+<div id="storageSetupOverlay" style="position:fixed;inset:0;z-index:999;background:linear-gradient(135deg,#1F4D3F,#2C6650);display:none;align-items:center;justify-content:center;padding:20px;font-family:'IBM Plex Sans',sans-serif;">
+  <div style="background:#fff;border-radius:14px;padding:26px 24px;max-width:380px;width:100%;position:relative;max-height:90vh;overflow-y:auto;">
+    <button id="storageCloseBtn" style="display:none;position:absolute;top:10px;right:10px;background:none;border:none;font-size:18px;color:#5E6F66;cursor:pointer;">&times;</button>
+    <div id="storageSetupBody"></div>
+  </div>
+</div>
+
+<script src="bgs-config.js" onerror="void 0"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script>
+(function(){
+  
+  
+  
+  const BGS_CONFIG = {
+    clientId: (window.BGS_PRECONFIGURED && window.BGS_PRECONFIGURED.clientId) || localStorage.getItem('bgs_drive_client_id') || '',
+    fileId:   (window.BGS_PRECONFIGURED && window.BGS_PRECONFIGURED.fileId)   || localStorage.getItem('bgs_drive_file_id')   || ''
+  };
+  
+
+  const $$ = (id) => document.getElementById(id);
+  let driveClientId = BGS_CONFIG.clientId;
+  let storageMode = localStorage.getItem('bgs_storage_mode') || '';
+  let driveToken = null;
+  let driveFileId = BGS_CONFIG.fileId;
+  let driveCache = null;
+  let readyResolve;
+  let isFirstRun = !storageMode;
+  const readyPromise = new Promise(r => { readyResolve = r; });
+  const BGS_FILE_NAME = 'BGS-tresorerie-data.json';
+  
+  const SCOPE = 'https://www.googleapis.com/auth/drive';
+
+  function hideOverlay(resolveNow){ $$('storageSetupOverlay').style.display = 'none'; if (resolveNow) readyResolve(); }
+  function showOverlay(){ $$('storageSetupOverlay').style.display = 'flex'; $$('storageCloseBtn').style.display = isFirstRun ? 'none' : 'block'; }
+
+  function label(text){ return '<label style="display:block;font-size:10.5px;font-weight:700;color:#5E6F66;text-transform:uppercase;letter-spacing:.3px;margin-bottom:4px;">'+text+'</label>'; }
+  function input(id, placeholder, value, type){
+    return '<input id="'+id+'" type="'+(type||'text')+'" placeholder="'+placeholder+'" value="'+(value||'')+'" autocomplete="off" spellcheck="false" style="width:100%;padding:10px;border:1.5px solid #DCE3DA;border-radius:8px;font-size:12.5px;margin-bottom:10px;box-sizing:border-box;font-family:monospace;">';
+  }
+  function btn(id, label, primary){
+    const bg = primary ? '#1F4D3F' : '#fff';
+    const color = primary ? '#fff' : '#16241F';
+    const border = primary ? 'none' : '1.5px solid #DCE3DA';
+    return '<button id="'+id+'" style="width:100%;padding:12px;border-radius:8px;border:'+border+';background:'+bg+';color:'+color+';font-weight:600;font-size:13.5px;cursor:pointer;margin-bottom:8px;">'+label+'</button>';
+  }
+
+  function screenChoice(){
+    
+    if (BGS_CONFIG.clientId && BGS_CONFIG.fileId) {
+      screenSimpleConnect();
+      return;
+    }
+    $$('storageSetupBody').innerHTML =
+      '<h2 style="font-family:\'Fraunces\',serif;font-size:18px;margin:0 0 6px;color:#16241F;">Stockage des données</h2>' +
+      '<p style="font-size:12px;color:#5E6F66;margin:0 0 16px;line-height:1.5;">Le fichier <b>BGS-tresorerie-data.json</b> dans Google Drive sert de base de données centrale. Tous les utilisateurs autorisés s\'y connectent avec leur propre compte Google.</p>' +
+      btn('btnDrive','☁️ Se connecter à Google Drive (recommandé)',true) +
+      btn('btnLocal','📱 Cet appareil seulement (sans partage)',false);
+    $$('btnLocal').onclick = () => { storageMode='local'; localStorage.setItem('bgs_storage_mode','local'); hideOverlay(true); };
+    $$('btnDrive').onclick = () => screenClientId();
+  }
+
+  function screenSimpleConnect(){
+    
+    $$('storageSetupBody').innerHTML =
+      '<div style="text-align:center;margin-bottom:16px;"><div style="width:48px;height:48px;background:#EEF2EC;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:22px;">☁️</div></div>' +
+      '<h2 style="font-family:\'Fraunces\',serif;font-size:18px;margin:0 0 6px;color:#16241F;text-align:center;">BGS Trésorerie</h2>' +
+      '<p style="font-size:12.5px;color:#5E6F66;margin:0 0 20px;line-height:1.5;text-align:center;">Connectez-vous avec votre compte Google pour accéder aux données partagées.</p>' +
+      '<div id="clientIdErr" style="color:#B5432F;font-size:12px;min-height:14px;margin-bottom:8px;text-align:center;"></div>' +
+      btn('btnConnectSimple','Se connecter avec Google',true) +
+      btn('btnLocalFallback','📱 Utiliser cet appareil seulement',false) +
+      '<p style="font-size:10px;color:#5E6F66;text-align:center;margin-top:6px;">Admin : menu Compte → Paramètres de stockage</p>';
+    $$('btnLocalFallback').onclick = () => { storageMode='local'; localStorage.setItem('bgs_storage_mode','local'); hideOverlay(true); };
+    $$('btnConnectSimple').onclick = async () => {
+      $$('clientIdErr').textContent = 'Connexion en cours…';
+      try {
+        await connectDrive(undefined);
+        storageMode = 'drive';
+        localStorage.setItem('bgs_storage_mode','drive');
+        await driveLoadCache();
+        hideOverlay(true);
+      } catch (err) {
+        console.error(err);
+        $$('clientIdErr').textContent = "Connexion impossible. Vérifiez que votre compte Gmail est bien autorisé sur ce fichier.";
+      }
+    };
+  }
+
+  function screenClientId(){
+    $$('storageSetupBody').innerHTML =
+      '<h2 style="font-family:\'Fraunces\',serif;font-size:17px;margin:0 0 4px;color:#16241F;">Connexion à Google Drive</h2>' +
+      '<p style="font-size:11.5px;color:#5E6F66;margin:0 0 14px;line-height:1.5;">Renseignez l\'ID client OAuth (Google Cloud Console) et l\'ID du fichier BGS partagé — ou laissez le champ ID fichier vide pour créer automatiquement un nouveau fichier BGS.</p>' +
+      label('ID client OAuth Google') +
+      input('clientIdInput','xxxx.apps.googleusercontent.com', driveClientId) +
+      label('ID du fichier BGS partagé') +
+      input('fileIdInput','Coller l\'ID du fichier (ex: 1BxiM…)', driveFileId) +
+      '<p style="font-size:10.5px;color:#5E6F66;margin:-6px 0 10px;line-height:1.4;">Si vous êtes le premier à configurer l\'app, laissez ce champ vide — l\'ID s\'affichera après connexion pour que vous puissiez le partager avec vos utilisateurs.</p>' +
+      '<div id="clientIdErr" style="color:#B5432F;font-size:12px;min-height:14px;margin-bottom:8px;"></div>' +
+      btn('btnConnect','Se connecter avec Google',true) +
+      btn('btnBackLocal','← Utiliser cet appareil seulement',false);
+    $$('btnBackLocal').onclick = () => { storageMode='local'; localStorage.setItem('bgs_storage_mode','local'); hideOverlay(true); };
+    $$('btnConnect').onclick = async () => {
+      const id = $$('clientIdInput').value.trim();
+      const fid = $$('fileIdInput').value.trim();
+      if (!id) { $$('clientIdErr').textContent = "L'ID client OAuth est requis."; return; }
+      driveClientId = id;
+      localStorage.setItem('bgs_drive_client_id', id);
+      if (fid) { driveFileId = fid; localStorage.setItem('bgs_drive_file_id', fid); }
+      $$('clientIdErr').textContent = 'Connexion en cours…';
+      try {
+        await connectDrive(undefined);
+        storageMode = 'drive';
+        localStorage.setItem('bgs_storage_mode','drive');
+        await driveLoadCache();
+        screenFileIdInfo();
+      } catch (err) {
+        console.error(err);
+        $$('clientIdErr').textContent = "Connexion impossible. Vérifiez l'ID client et que l'URL Netlify est bien autorisée dans Google Cloud Console.";
+      }
+    };
+  }
+
+  function screenFileIdInfo(){
+    const isNew = !localStorage.getItem('bgs_drive_file_shown');
+    const msg = isNew
+      ? '<p style="font-size:12px;color:#5E6F66;line-height:1.5;margin:0 0 12px;">✅ Connecté ! Voici l\'ID de votre fichier BGS. Pour que vos utilisateurs n\'aient plus rien à saisir, cliquez <b>"Générer l\'app pré-configurée"</b> puis redéployez ce fichier sur Netlify.</p>'
+      : '<p style="font-size:12px;color:#5E6F66;line-height:1.5;margin:0 0 12px;">ID de votre fichier BGS partagé :</p>';
+    $$('storageSetupBody').innerHTML =
+      '<h2 style="font-family:\'Fraunces\',serif;font-size:17px;margin:0 0 8px;color:#16241F;">Fichier BGS connecté ✓</h2>' +
+      msg +
+      '<div style="display:flex;gap:8px;align-items:center;background:#EEF2EC;border-radius:8px;padding:10px 12px;margin-bottom:10px;">' +
+        '<code id="fileIdDisplay" style="font-size:10.5px;flex:1;word-break:break-all;color:#16241F;">' + (driveFileId||'—') + '</code>' +
+        '<button id="copyFileId" style="flex:none;padding:6px 10px;border-radius:6px;border:1.5px solid #DCE3DA;background:#fff;font-size:11.5px;font-weight:600;cursor:pointer;">Copier</button>' +
+      '</div>' +
+      '<p style="font-size:10.5px;color:#5E6F66;margin:0 0 10px;line-height:1.4;">Partagez <b>BGS-tresorerie-data.json</b> dans Google Drive avec le Gmail de chaque utilisateur (clic droit → Partager).</p>' +
+      btn('btnGenerate','⬇ Générer l\'app pré-configurée (pour Netlify)',true) +
+      btn('btnDone','✓ Accéder à l\'application',false);
+    localStorage.setItem('bgs_drive_file_shown', '1');
+    $$('copyFileId').onclick = () => { navigator.clipboard.writeText(driveFileId||'').then(() => { $$('copyFileId').textContent = '✓ Copié'; setTimeout(()=>{ $$('copyFileId').textContent = 'Copier'; },2000); }); };
+    $$('btnDone').onclick = () => hideOverlay(true);
+    $$('btnGenerate').onclick = () => generatePreconfiguredApp();
+  }
+
+  function generatePreconfiguredApp(){
+    const cId = (driveClientId||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    const fId = (driveFileId||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    const configContent = '// Configuration BGS — généré automatiquement\nwindow.BGS_PRECONFIGURED = {\n  clientId: \'' + cId + '\',\n  fileId:   \'' + fId + '\'\n};\n';
+    const blob = new Blob([configContent], { type: 'application/javascript;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'bgs-config.js';
+    a.click();
+    $$('btnGenerate').textContent = '✅ bgs-config.js téléchargé !';
+    $$('storageSetupBody').insertAdjacentHTML('beforeend',
+      '<div style="margin-top:12px;background:#E3F1E8;border-radius:8px;padding:12px;font-size:12px;line-height:1.6;color:#16241F;">' +
+      '<b>Dernière étape :</b><br>Allez sur Netlify → votre site → onglet <b>Deploys</b><br>' +
+      'Glissez <b>uniquement ce fichier bgs-config.js</b> dans la zone de dépôt.<br>' +
+      'C\'est tout — ni vous ni vos utilisateurs ne reverrez jamais les champs ID.' +
+      '</div>'
+    );
+  }
+
+  function connectDrive(promptMode){
+    return new Promise((resolve, reject) => {
+      if (typeof google === 'undefined' || !google.accounts) { reject(new Error('gis-not-loaded')); return; }
+      try {
+        const client = google.accounts.oauth2.initTokenClient({
+          client_id: driveClientId,
+          scope: SCOPE,
+          prompt: promptMode === undefined ? '' : promptMode,
+          callback: (resp) => {
+            if (!resp || resp.error) { reject(resp || new Error('auth-failed')); return; }
+            driveToken = resp.access_token;
+            resolve(driveToken);
+          },
+          error_callback: (err) => reject(err)
+        });
+        client.requestAccessToken();
+      } catch (e) { reject(e); }
+    });
+  }
+
+  async function driveFetch(url, opts){
+    opts = opts || {};
+    opts.headers = Object.assign({}, opts.headers, { Authorization: 'Bearer ' + driveToken });
+    let res = await fetch(url, opts);
+    if (res.status === 401) { await connectDrive(undefined); opts.headers.Authorization = 'Bearer ' + driveToken; res = await fetch(url, opts); }
+    if (!res.ok) throw new Error('drive-http-' + res.status);
+    return res;
+  }
+
+  async function driveFindOrCreateFile(){
+    if (driveFileId) return driveFileId;
+    
+    const q = encodeURIComponent("name='" + BGS_FILE_NAME + "' and trashed=false");
+    const res = await driveFetch('https://www.googleapis.com/drive/v3/files?q=' + q + '&fields=files(id,name)&includeItemsFromAllDrives=false');
+    const data = await res.json();
+    if (data.files && data.files.length) {
+      driveFileId = data.files[0].id;
+    } else {
+      
+      const metadata = { name: BGS_FILE_NAME, mimeType: 'application/json' };
+      const boundary = 'bgsbound';
+      const body = '--'+boundary+'\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n'+JSON.stringify(metadata)+'\r\n--'+boundary+'\r\nContent-Type: application/json\r\n\r\n{}\r\n--'+boundary+'--';
+      const createRes = await driveFetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', {
+        method: 'POST', headers: { 'Content-Type': 'multipart/related; boundary='+boundary }, body
+      });
+      const created = await createRes.json();
+      driveFileId = created.id;
+    }
+    localStorage.setItem('bgs_drive_file_id', driveFileId);
+    return driveFileId;
+  }
+
+  async function driveLoadCache(){
+    const id = await driveFindOrCreateFile();
+    const res = await driveFetch('https://www.googleapis.com/drive/v3/files/'+id+'?alt=media');
+    try { driveCache = await res.json(); } catch(e){ driveCache = {}; }
+    if (!driveCache || typeof driveCache !== 'object') driveCache = {};
+  }
+
+  async function driveSaveCache(){
+    const id = driveFileId || await driveFindOrCreateFile();
+    await driveFetch('https://www.googleapis.com/upload/drive/v3/files/'+id+'?uploadType=media', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(driveCache || {})
+    });
+  }
+
+  async function ensureDriveSession(){
+    if (driveToken && driveCache) return;
+    if (!driveToken) { await connectDrive(undefined); }
+    if (!driveCache) await driveLoadCache();
+  }
+
+  window.storage = {
+    async get(key){
+      await readyPromise;
+      if (storageMode === 'drive') {
+        await ensureDriveSession();
+        if (!(key in driveCache)) throw new Error('not found');
+        return { key, value: driveCache[key], shared: true };
+      }
+      const v = localStorage.getItem('bgsdata_'+key);
+      if (v===null) throw new Error('not found');
+      return {key, value:v, shared:false};
+    },
+    async set(key, value){
+      await readyPromise;
+      if (storageMode === 'drive') {
+        await ensureDriveSession();
+        driveCache[key] = value;
+        await driveSaveCache();
+        return { key, value, shared:true };
+      }
+      localStorage.setItem('bgsdata_'+key, value);
+      return {key, value, shared:false};
+    },
+    async delete(key){
+      await readyPromise;
+      if (storageMode === 'drive') {
+        await ensureDriveSession();
+        delete driveCache[key];
+        await driveSaveCache();
+        return { key, deleted:true, shared:true };
+      }
+      localStorage.removeItem('bgsdata_'+key);
+      return {key, deleted:true, shared:false};
+    },
+    async list(prefix){
+      await readyPromise;
+      if (storageMode === 'drive') {
+        await ensureDriveSession();
+        return { keys: Object.keys(driveCache).filter(k => k.indexOf(prefix||'')===0) };
+      }
+      const all = Object.keys(localStorage).filter(k=>k.indexOf('bgsdata_'+(prefix||''))===0).map(k=>k.replace('bgsdata_',''));
+      return { keys: all };
+    }
+  };
+
+  window.__bgsOpenStorageSettings = () => {
+    isFirstRun = false;
+    showOverlay();
+    if (storageMode === 'drive' && driveFileId) screenFileIdInfo();
+    else if (driveClientId && driveFileId) screenFileIdInfo();
+    else if (driveClientId) screenClientId();
+    else screenChoice();
+  };
+  $$('storageCloseBtn').addEventListener('click', () => hideOverlay(false));
+
+  if (!storageMode) {
+    showOverlay(); screenChoice();
+  } else if (storageMode === 'drive') {
+    showOverlay();
+    $$('storageSetupBody').innerHTML = '<p style="font-size:13px;color:#5E6F66;text-align:center;padding:20px 0;">Connexion à Google Drive…</p>';
+    connectDrive('none')
+      .then(() => driveLoadCache())
+      .then(() => hideOverlay(true))
+      .catch(() => {
+        isFirstRun = false;
+        
+        if (BGS_CONFIG.clientId && BGS_CONFIG.fileId) screenSimpleConnect();
+        else screenClientId();
+      });
+  } else {
+    hideOverlay(true);
+  }
+})();
+</script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+.bgs-app {
+  --ink: #16241F;
+  --muted: #5E6F66;
+  --bg: #EEF2EC;
+  --surface: #FFFFFF;
+  --line: #DCE3DA;
+  --primary: #1F4D3F;
+  --primary-light: #2C6650;
+  --accent: #C98A3B;
+  --accent-soft: #F3E2C8;
+  --income: #2E7D52;
+  --income-soft: #E3F1E8;
+  --expense: #B5432F;
+  --expense-soft: #F8E5E1;
+  font-family: 'IBM Plex Sans', sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+  min-height: 100%;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  position: relative;
+}
+.bgs-app * { box-sizing: border-box; }
+.bgs-app .mono { font-family: 'IBM Plex Mono', monospace; font-variant-numeric: tabular-nums; }
+.bgs-app .display { font-family: 'Fraunces', serif; }
+
+/* ---- auth ---- */
+.bgs-auth-screen {
+  position: absolute; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; padding: 24px;
+  background:
+    radial-gradient(circle, rgba(255,255,255,0.10) 1.2px, transparent 1.2px),
+    linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 100%);
+  background-size: 11px 11px, 100% 100%;
+}
+.bgs-auth-card { background: #fff; border-radius: 14px; padding: 26px 24px; max-width: 320px; width: 100%; }
+.bgs-auth-card .lock { width: 38px; height: 38px; border-radius: 10px; background: var(--accent-soft); color: #7A5217; display:flex; align-items:center; justify-content:center; margin-bottom: 12px; }
+.bgs-auth-card h2 { font-family: 'Fraunces', serif; font-size: 18px; margin: 0 0 3px; }
+.bgs-auth-card .sub { font-size: 12px; color: var(--muted); margin-bottom: 18px; line-height: 1.4; }
+.bgs-auth-err { color: var(--expense); font-size: 12px; margin-top: 4px; min-height: 14px; }
+.bgs-auth-switch { font-size: 11.5px; color: var(--muted); margin-top: 14px; text-align: center; }
+.bgs-auth-switch button { background: none; border: none; color: var(--primary); font-weight: 600; cursor: pointer; font-size: 11.5px; padding: 0; }
+
+/* ---- top bar ---- */
+.bgs-topbar {
+  background: linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 100%);
+  background-image:
+    radial-gradient(circle, rgba(255,255,255,0.10) 1.2px, transparent 1.2px),
+    linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 100%);
+  background-size: 11px 11px, 100% 100%;
+  color: #fff;
+  padding: 20px 22px 16px;
+  position: relative;
+}
+.bgs-brand { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.bgs-brand h1 { font-family: 'Fraunces', serif; font-weight: 700; font-size: 19px; margin: 0; letter-spacing: 0.2px; }
+.bgs-brand span.tag { font-size: 11px; opacity: 0.78; display:block; margin-top: 2px; font-weight: 400; }
+.bgs-account-btn { background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.26); color: #fff; font-size: 11.5px; font-weight: 600; padding: 6px 11px; border-radius: 99px; cursor: pointer; display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.bgs-account-btn:hover { background: rgba(255,255,255,0.22); }
+.bgs-account-menu { position: absolute; top: 56px; right: 18px; background: #fff; border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 10px 28px rgba(0,0,0,0.18); padding: 6px; z-index: 80; min-width: 200px; display: none; }
+.bgs-account-menu.open { display: block; }
+.bgs-account-menu .who { font-size: 11.5px; color: var(--muted); padding: 8px 10px 4px; }
+.bgs-account-menu button { width: 100%; text-align: left; background: none; border: none; padding: 9px 10px; border-radius: 7px; font-size: 13px; cursor: pointer; color: var(--ink); display:flex; align-items:center; gap:8px; }
+.bgs-account-menu button:hover { background: var(--bg); }
+.bgs-account-menu button.danger { color: var(--expense); }
+
+.bgs-hero-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 16px; }
+.bgs-stat { background: rgba(255,255,255,0.10); border: 1px solid rgba(255,255,255,0.18); border-radius: 10px; padding: 10px 12px; }
+.bgs-stat .lbl { font-size: 10.5px; opacity: 0.8; text-transform: uppercase; letter-spacing: 0.5px; }
+.bgs-stat .val { font-family: 'IBM Plex Mono', monospace; font-size: 17px; font-weight: 600; margin-top: 3px; }
+.bgs-stat.solde-pos .val { color: #BCEBCF; }
+.bgs-stat.solde-neg .val { color: #F4C2BA; }
+
+/* ---- nav ---- */
+.bgs-nav { display: flex; gap: 4px; background: var(--surface); padding: 8px 10px; overflow-x: auto; border-bottom: 1px solid var(--line); }
+@media (max-width: 480px) {
+  .bgs-nav { flex-wrap: wrap; overflow-x: visible; }
+  .bgs-nav button { flex: 1 1 30%; justify-content: center; padding: 9px 6px; font-size: 11.5px; }
+}
+.bgs-nav button {
+  font-family: 'IBM Plex Sans', sans-serif; font-size: 12.5px; font-weight: 600; color: var(--muted);
+  background: transparent; border: none; padding: 8px 12px; border-radius: 8px; cursor: pointer;
+  display: flex; align-items: center; gap: 6px; white-space: nowrap; transition: background .15s, color .15s;
+}
+.bgs-nav button svg { width: 15px; height: 15px; flex: none; }
+.bgs-nav button:hover { background: var(--bg); }
+.bgs-nav button.active { background: var(--primary); color: #fff; }
+
+/* ---- panels ---- */
+.bgs-body { padding: 16px; }
+.bgs-panel { display: none; }
+.bgs-panel.active { display: block; animation: bgsFade .25s ease; }
+@keyframes bgsFade { from { opacity: 0; transform: translateY(4px);} to { opacity:1; transform:none;} }
+
+.bgs-card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 14px; }
+.bgs-card h2 { font-family: 'Fraunces', serif; font-size: 15px; margin: 0 0 12px; font-weight: 600; }
+.bgs-card h2 .sub { display:block; font-family:'IBM Plex Sans'; font-weight:400; font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+
+.bgs-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 640px) { .bgs-grid-2 { grid-template-columns: 1fr; } .bgs-hero-stats{ grid-template-columns: 1fr; } }
+
+.bgs-chart-wrap { position: relative; height: 230px; }
+.bgs-empty { color: var(--muted); font-size: 12.5px; text-align: center; padding: 30px 10px; }
+
+/* ---- forms ---- */
+.bgs-field { margin-bottom: 12px; }
+.bgs-field label { display: block; font-size: 11.5px; font-weight: 600; color: var(--muted); margin-bottom: 5px; text-transform: uppercase; letter-spacing: .3px; }
+.bgs-field input, .bgs-field select, .bgs-field textarea {
+  width: 100%; font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; padding: 10px 11px;
+  border: 1.5px solid var(--line); border-radius: 8px; background: #fff; color: var(--ink); outline: none;
+  transition: border-color .15s;
+}
+.bgs-field input:focus, .bgs-field select:focus, .bgs-field textarea:focus { border-color: var(--primary); }
+.bgs-field input.mono { font-family: 'IBM Plex Mono', monospace; }
+.bgs-row { display: flex; gap: 10px; }
+.bgs-row > * { flex: 1; }
+.bgs-toggle-group { display: flex; gap: 8px; }
+.bgs-toggle-btn { flex: 1; padding: 9px 10px; border-radius: 8px; border: 1.5px solid var(--line); background: #fff; font-family: 'IBM Plex Sans'; font-size: 12.5px; font-weight: 600; cursor: pointer; color: var(--ink); }
+.bgs-toggle-btn.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+
+.bgs-btn {
+  font-family: 'IBM Plex Sans', sans-serif; font-weight: 600; font-size: 13.5px; padding: 10px 16px;
+  border-radius: 8px; border: none; cursor: pointer; transition: filter .15s, transform .1s;
+}
+.bgs-btn:active { transform: scale(0.98); }
+.bgs-btn-in { background: var(--income); color: #fff; }
+.bgs-btn-out { background: var(--expense); color: #fff; }
+.bgs-btn-ghost { background: var(--bg); color: var(--ink); border: 1.5px solid var(--line); }
+.bgs-btn-primary { background: var(--primary); color: #fff; }
+.bgs-btn:hover { filter: brightness(1.06); }
+.bgs-btn-full { width: 100%; }
+
+/* ---- chips ---- */
+.bgs-chips { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+.bgs-chip { display:flex; align-items:center; gap:6px; background: var(--accent-soft); color:#7A5217; font-size: 12px; font-weight:600; padding: 5px 6px 5px 11px; border-radius: 99px; }
+.bgs-chip button { background:none; border:none; cursor:pointer; color:#7A5217; width:18px; height:18px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:13px; line-height:1; }
+.bgs-chip button:hover { background: rgba(0,0,0,0.08); }
+.bgs-add-product { display: flex; gap: 8px; margin-top: 10px; }
+.bgs-add-product input { flex:1; }
+
+/* ---- lists / table ---- */
+.bgs-tx { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.bgs-tx:last-child { border-bottom: none; }
+.bgs-tx .ic { width: 30px; height:30px; border-radius: 50%; display:flex; align-items:center; justify-content:center; flex:none; }
+.bgs-tx .ic.in { background: var(--income-soft); color: var(--income); }
+.bgs-tx .ic.out { background: var(--expense-soft); color: var(--expense); }
+.bgs-tx .meta { flex: 1; min-width:0; }
+.bgs-tx .meta .t1 { font-size: 13.5px; font-weight: 600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.bgs-tx .meta .t2 { font-size: 11.5px; color: var(--muted); }
+.bgs-tx .amt { font-weight: 600; font-size: 13.5px; flex: none; }
+.bgs-tx .amt.in { color: var(--income); }
+.bgs-tx .amt.out { color: var(--expense); }
+.bgs-tx .del { background:none; border:none; color: var(--muted); cursor:pointer; padding: 4px; opacity: .55; }
+.bgs-tx .del:hover { opacity: 1; color: var(--expense); }
+
+.bgs-filters { display:flex; gap:8px; margin-bottom: 12px; flex-wrap: wrap; align-items:center; }
+.bgs-filters select { font-family:'IBM Plex Sans'; font-size:12.5px; padding: 7px 10px; border-radius: 8px; border: 1.5px solid var(--line); background:#fff; }
+
+.bgs-badge { font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 99px; text-transform: uppercase; letter-spacing: .3px;}
+.bgs-badge.leader { background: var(--accent-soft); color: #7A5217; }
+
+/* ---- objectifs ---- */
+.bgs-obj-table-wrap { overflow-x: auto; }
+.bgs-scroll-hint { display: none; font-size: 11px; color: var(--muted); text-align: center; margin-top: 8px; }
+@media (max-width: 700px) { .bgs-scroll-hint { display: block; } }
+table.bgs-obj-table { width: 100%; border-collapse: collapse; font-size: 12.5px; min-width: 620px; }
+table.bgs-obj-table th { text-align: left; font-size: 10.2px; text-transform: uppercase; letter-spacing: .3px; color: var(--muted); padding: 7px 8px; border-bottom: 2px solid var(--line); white-space: nowrap; }
+table.bgs-obj-table td { padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+table.bgs-obj-table tr:last-child td { border-bottom: none; }
+table.bgs-obj-table input { width: 92px; font-family: 'IBM Plex Mono', monospace; font-size: 12px; padding: 5px 7px; border: 1.5px solid var(--line); border-radius: 6px; }
+table.bgs-obj-table input:focus { border-color: var(--primary); outline: none; }
+.bgs-progress { height: 6px; border-radius: 99px; background: var(--line); overflow: hidden; width: 64px; display: inline-block; vertical-align: middle; margin-right: 7px; }
+.bgs-progress > div { height: 100%; border-radius: 99px; }
+.bgs-pct { font-weight: 700; }
+.bgs-pct.low { color: var(--expense); }
+.bgs-pct.mid { color: var(--accent); }
+.bgs-pct.high { color: var(--income); }
+
+/* ---- toast / modal ---- */
+.bgs-toast { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); background: var(--ink); color: #fff; font-size: 13px; padding: 10px 16px; border-radius: 8px; opacity:0; pointer-events:none; transition: opacity .2s, transform .2s; z-index: 120; max-width: 90%; text-align:center; }
+.bgs-toast.show { opacity: 1; transform: translateX(-50%) translateY(-4px); }
+.bgs-toast.err { background: var(--expense); }
+
+.bgs-modal-overlay { position: absolute; inset: 0; background: rgba(22,36,31,0.45); display:flex; align-items:center; justify-content:center; z-index: 110; padding: 20px; }
+.bgs-modal { background: #fff; border-radius: 12px; padding: 18px; max-width: 320px; width: 100%; }
+.bgs-modal h3 { font-family: 'Fraunces', serif; font-size: 15px; margin: 0 0 12px; }
+.bgs-modal p { font-size: 13.5px; margin: 0 0 14px; }
+.bgs-modal .actions { display:flex; gap:8px; justify-content:flex-end; margin-top: 4px; }
+
+.bgs-footer-note { text-align:center; font-size: 10.5px; color: var(--muted); padding: 4px 16px 14px; display:flex; align-items:center; justify-content:center; gap:5px; }
+</style>
+
+<div class="bgs-app" id="bgsApp">
+
+  <!-- AUTH OVERLAY -->
+  <div class="bgs-auth-screen" id="authOverlay" style="display:none;">
+    <div class="bgs-auth-card">
+      <div class="lock"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></div>
+      <div id="authBody"></div>
+    </div>
+  </div>
+
+  <!-- APP CONTENT -->
+  <div id="appContent" style="display:none;">
+    <div class="bgs-topbar">
+      <div class="bgs-brand">
+        <div>
+          <h1>BINETA GLOBAL SERVICES</h1>
+          <span class="tag">Suivi de trésorerie — encaissements &amp; décaissements</span>
+        </div>
+        <button class="bgs-account-btn" id="accountBtn">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/></svg>
+          <span id="accountBtnLabel">Compte</span>
+        </button>
+        <div class="bgs-account-menu" id="accountMenu">
+          <div class="who">Connecté en tant que <b id="accountWho"></b><span id="roleBadge" style="display:none;color:var(--accent);font-weight:700;"> · lecture seule</span></div>
+          <button id="changePwBtn"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg> Changer le mot de passe</button>
+          <button id="adminParamsBtn"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9"/></svg> Paramètres app</button>
+          <button id="viewerAccessBtn"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg> Accès consultation client</button>
+          <button id="storageSettingsBtn"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg> Paramètres de stockage</button>
+          <button class="danger" id="logoutBtn"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg> Se déconnecter</button>
+        </div>
+      </div>
+      <div class="bgs-hero-stats">
+        <div class="bgs-stat"><div class="lbl">Encaissé (cumul)</div><div class="val mono" id="statIn">—</div></div>
+        <div class="bgs-stat"><div class="lbl">Décaissé (cumul)</div><div class="val mono" id="statOut">—</div></div>
+        <div class="bgs-stat" id="statSoldeWrap"><div class="lbl">Solde net</div><div class="val mono" id="statSolde">—</div></div>
+      </div>
+    </div>
+
+    <nav class="bgs-nav" id="bgsNav">
+      <button data-tab="dashboard" class="active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>
+        Tableau de bord
+      </button>
+      <button data-tab="encaisser">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>
+        Encaissement
+      </button>
+      <button data-tab="decaisser">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></svg>
+        Décaissement
+      </button>
+      <button data-tab="objectifs">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></svg>
+        Objectifs
+      </button>
+      <button data-tab="journal">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+        Journal
+      </button>
+      <button data-tab="stocks">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+        Stocks
+      </button>
+    </nav>
+
+    <div class="bgs-body">
+
+      <!-- DASHBOARD -->
+      <section class="bgs-panel active" id="panel-dashboard">
+        <div id="alerteBanderol" style="display:none;background:var(--expense-soft);border:1px solid var(--expense);border-radius:10px;padding:10px 14px;font-size:12.5px;color:var(--expense);font-weight:600;margin-bottom:12px;"></div>
+        <div class="bgs-grid-2">
+          <div class="bgs-card">
+            <h2>Flux mensuel<span class="sub">Encaissements vs décaissements</span></h2>
+            <div class="bgs-chart-wrap"><canvas id="chartFlux"></canvas><div class="bgs-empty" id="emptyFlux" style="display:none;">Aucune donnée pour le moment.</div></div>
+          </div>
+          <div class="bgs-card">
+            <h2>Répartition des encaissements<span class="sub">Par produit, cumul</span></h2>
+            <div class="bgs-chart-wrap"><canvas id="chartRepartition"></canvas><div class="bgs-empty" id="emptyRepartition" style="display:none;">Aucun encaissement enregistré.</div></div>
+          </div>
+        </div>
+        <div class="bgs-card">
+          <h2>Évolution du solde<span class="sub">Solde net cumulé mois par mois</span></h2>
+          <div class="bgs-chart-wrap"><canvas id="chartSolde"></canvas><div class="bgs-empty" id="emptySolde" style="display:none;">Pas encore assez de données.</div></div>
+        </div>
+        <div class="bgs-card">
+          <h2>Produit leader &amp; dernières opérations</h2>
+          <div id="leaderLine" style="font-size:13px; margin-bottom:10px; color:var(--muted);"></div>
+          <div id="recentList"></div>
+        </div>
+      </section>
+
+      <!-- ENCAISSEMENT -->
+      <section class="bgs-panel" id="panel-encaisser">
+        <div class="bgs-card" id="encFormCard">
+          <h2>Nouvel encaissement<span class="sub">Vente produit, ou autre rentrée (prêt, apport...)</span></h2>
+          <form id="formEnc">
+            <div class="bgs-field"><label>Type d'encaissement</label>
+              <div class="bgs-toggle-group">
+                <button type="button" class="bgs-toggle-btn active" id="encCatProduit" data-cat="produit">Vente produit</button>
+                <button type="button" class="bgs-toggle-btn" id="encCatAutre" data-cat="autre">Autre (prêt, apport…)</button>
+              </div>
+            </div>
+            <div class="bgs-row">
+              <div class="bgs-field"><label>Date</label><input type="date" id="encDate" required></div>
+              <div class="bgs-field" id="encProduitField"><label>Produit</label>
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <span id="encProductPreview" style="flex:none;"></span>
+                  <select id="encProduct" style="flex:1;"></select>
+                </div>
+              </div>
+              <div class="bgs-field" id="encAutreField" style="display:none;"><label>Source / description</label><input type="text" id="encSource" placeholder="ex: Remboursement prêt M. Diop"></div>
+            </div>
+            <div class="bgs-field"><label>Montant (FCFA)</label><input type="number" min="1" step="1" class="mono" id="encAmount" placeholder="ex: 45000" required></div>
+            <div class="bgs-field"><label>Note (optionnel)</label><input type="text" id="encNote" placeholder="ex: Client boutique Almadies"></div>
+            <button type="submit" class="bgs-btn bgs-btn-in bgs-btn-full">+ Enregistrer l'encaissement</button>
+          </form>
+          <div style="margin-top:14px; border-top:1px solid var(--line); padding-top:12px;">
+            <h2 style="margin-bottom:6px;">Mes produits</h2>
+            <div class="bgs-chips" id="productChips"></div>
+            <div class="bgs-add-product">
+              <input type="text" id="newProductInput" placeholder="Ajouter un produit…">
+              <button class="bgs-btn bgs-btn-ghost" id="addProductBtn">Ajouter</button>
+            </div>
+          </div>
+        </div>
+        <div class="bgs-card" id="encImportCard">
+          <h2>Import en masse<span class="sub">Pour saisir plusieurs encaissements d'un coup depuis un fichier</span></h2>
+          <div style="font-size:12.5px;color:var(--muted);margin-bottom:10px;">Téléchargez le modèle Excel (.xlsx), remplissez-le, puis réimportez-le. Colonnes : <b>Date</b> (JJ/MM/AAAA) ; <b>Type</b> (Produit ou Autre) ; <b>Produit</b> (si type Produit) ; <b>Source</b> (si type Autre) ; <b>Montant</b> ; Note</div>
+          <div class="bgs-row">
+            <button class="bgs-btn bgs-btn-ghost bgs-btn-full" id="downloadEncTemplate">⬇ Télécharger le modèle</button>
+            <button class="bgs-btn bgs-btn-ghost bgs-btn-full" id="importEncBtn">⬆ Importer un fichier</button>
+          </div>
+          <input type="file" id="importEncFile" accept=".xlsx,.xls,.csv" style="display:none;">
+          <div id="importEncResult" style="font-size:12.5px;margin-top:10px;"></div>
+        </div>
+        <div class="bgs-card">
+          <h2>Derniers encaissements</h2>
+          <div id="recentEnc"></div>
+        </div>
+      </section>
+
+      <!-- DECAISSEMENT -->
+      <section class="bgs-panel" id="panel-decaisser">
+        <div class="bgs-card" id="decFormCard">
+          <h2>Nouveau décaissement<span class="sub">Dépense courante, salaire, ou autre sortie</span></h2>
+          <form id="formDec">
+            <div class="bgs-field"><label>Type</label>
+              <div class="bgs-toggle-group">
+                <button type="button" class="bgs-toggle-btn active" id="decCatDepense" data-cat="depense">Dépense</button>
+                <button type="button" class="bgs-toggle-btn" id="decCatSalaire" data-cat="salaire">💰 Salaire</button>
+              </div>
+            </div>
+            <div class="bgs-field"><label>Date</label><input type="date" id="decDate" required></div>
+            <div class="bgs-field" id="decDescField"><label>Description</label><input type="text" id="decDesc" placeholder="ex: Achat emballages, transport, loyer…"></div>
+            <div class="bgs-field" id="decBenefField" style="display:none;"><label>Bénéficiaire (nom)</label><input type="text" id="decBenef" placeholder="ex: Aminata Sow"></div>
+            <div class="bgs-field"><label>Montant (FCFA)</label><input type="number" min="1" step="1" class="mono" id="decAmount" placeholder="ex: 15000" required></div>
+            <button type="submit" class="bgs-btn bgs-btn-out bgs-btn-full">+ Enregistrer le décaissement</button>
+          </form>
+        </div>
+        <div class="bgs-card" id="decImportCard">
+          <h2>Import en masse<span class="sub">Pour saisir plusieurs décaissements d'un coup depuis un fichier</span></h2>
+          <div style="font-size:12.5px;color:var(--muted);margin-bottom:10px;">Téléchargez le modèle Excel (.xlsx), remplissez-le, puis réimportez-le. Colonnes : <b>Date</b> (JJ/MM/AAAA) ; <b>Description</b> ; <b>Montant</b></div>
+          <div class="bgs-row">
+            <button class="bgs-btn bgs-btn-ghost bgs-btn-full" id="downloadDecTemplate">⬇ Télécharger le modèle</button>
+            <button class="bgs-btn bgs-btn-ghost bgs-btn-full" id="importDecBtn">⬆ Importer un fichier</button>
+          </div>
+          <input type="file" id="importDecFile" accept=".xlsx,.xls,.csv" style="display:none;">
+          <div id="importDecResult" style="font-size:12.5px;margin-top:10px;"></div>
+        </div>
+        <div class="bgs-card">
+          <h2>Derniers décaissements</h2>
+          <div id="recentDec"></div>
+        </div>
+      </section>
+
+
+      <!-- OBJECTIFS -->
+      <section class="bgs-panel" id="panel-objectifs">
+        <div class="bgs-card">
+          <h2>Suivi des objectifs<span class="sub">Objectif mensuel par produit, comparé au réalisé</span></h2>
+          <div class="bgs-filters">
+            <select id="objYear"></select>
+          </div>
+          <div class="bgs-obj-table-wrap"><table class="bgs-obj-table" id="objTable"></table></div>
+          <div class="bgs-scroll-hint">↔ Faites glisser le tableau horizontalement pour voir toutes les colonnes</div>
+        </div>
+      </section>
+
+      <!-- JOURNAL -->
+      <section class="bgs-panel" id="panel-journal">
+        <div class="bgs-card">
+          <h2>Journal des opérations</h2>
+          <div class="bgs-filters">
+            <select id="filterMonth"></select>
+            <select id="filterType">
+              <option value="all">Tous types</option>
+              <option value="in">Encaissements</option>
+              <option value="out">Décaissements</option>
+            </select>
+            <button class="bgs-btn bgs-btn-ghost" id="exportBtn">⬇ Excel</button>
+            <button class="bgs-btn bgs-btn-ghost" id="exportPdfBtn">📄 PDF</button>
+          </div>
+          <div id="journalList"></div>
+        </div>
+      </section>
+      <!-- STOCKS -->
+      <section class="bgs-panel" id="panel-stocks">
+        <div class="bgs-card">
+          <h2>Paramétrage des produits<span class="sub">Prix unitaire et stock de départ</span></h2>
+          <div id="stocksParamList"></div>
+        </div>
+        <div class="bgs-card">
+          <h2>Tableau des stocks<span class="sub">Calculé à partir des ventes enregistrées</span></h2>
+          <div id="stocksBoard"></div>
+        </div>
+      </section>
+
+    </div>
+    <div class="bgs-footer-note">
+      <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+      Accès protégé par mot de passe — protection simple, à usage personnel.
+    </div>
+  </div>
+
+  <div class="bgs-toast" id="bgsToast"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.0/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<style>
+.bgs-trend { font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:99px;margin-left:6px;vertical-align:middle; }
+.bgs-trend.up { background:#E3F1E8;color:var(--income); }
+.bgs-trend.down { background:var(--expense-soft);color:var(--expense); }
+.bgs-trend.neu { background:var(--bg);color:var(--muted); }
+.bgs-stock-row { display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line); }
+.bgs-stock-row:last-child{border-bottom:none;}
+.bgs-stock-bar-wrap{flex:1;height:6px;background:var(--line);border-radius:99px;overflow:hidden;}
+.bgs-stock-bar{height:100%;border-radius:99px;}
+.bgs-creance-row{padding:10px 0;border-bottom:1px solid var(--line);}
+.bgs-creance-row:last-child{border-bottom:none;}
+.bgs-creance-head{display:flex;align-items:center;gap:8px;}
+.bgs-creance-meta{font-size:11.5px;color:var(--muted);margin-top:3px;}
+.badge-en-attente{background:#FEF3C7;color:#92400E;font-size:9.5px;font-weight:700;padding:2px 7px;border-radius:99px;}
+.badge-retard{background:var(--expense-soft);color:var(--expense);font-size:9.5px;font-weight:700;padding:2px 7px;border-radius:99px;}
+.badge-reçue{background:var(--income-soft);color:var(--income);font-size:9.5px;font-weight:700;padding:2px 7px;border-radius:99px;}
+.bgs-stock-input-row{display:flex;align-items:center;gap:8px;padding:10px 0;border-bottom:1px solid var(--line);}
+.bgs-stock-input-row:last-child{border-bottom:none;}
+.bgs-stock-input-row label{font-size:13px;font-weight:600;flex:1;}
+.bgs-stock-input-row input{width:90px;font-family:'IBM Plex Mono',monospace;font-size:13px;padding:6px 8px;border:1.5px solid var(--line);border-radius:7px;text-align:right;}
+</style>
+<script>
+(function(){
+  const K = { products: 'bgs_products', enc: 'bgs_encaissements', dec: 'bgs_decaissements', auth: 'bgs_auth', obj: 'bgs_objectifs', viewerAuth: 'bgs_viewer_auth', stocks: 'bgs_stocks', params: 'bgs_params' };
+  const SV_B64 = null;
+  const NB_B64 = null;
+  const PRODUCT_LOGOS = { 'sugar vanilla': 'icons/logo-sv.png', 'nutriboo': 'icons/logo-nb.png' };
+  function productIconHTML(name, size){
+    size = size || 26;
+    const key = String(name||'').trim().toLowerCase();
+    if (PRODUCT_LOGOS[key]) return '<img src="' + PRODUCT_LOGOS[key] + '" alt="" style="width:' + size + 'px;height:' + size + 'px;border-radius:50%;object-fit:cover;flex:none;display:block;">';
+    const letter = String(name||'?').trim().charAt(0).toUpperCase();
+    const palette = ['#1F4D3F','#C98A3B','#5E9C8B','#7A5217','#94B3A6','#B5432F'];
+    let h = 0; const s = String(name||'');
+    for (let i=0;i<s.length;i++) h = (h*31 + s.charCodeAt(i)) >>> 0;
+    const color = palette[h % palette.length];
+    return '<span style="width:' + size + 'px;height:' + size + 'px;border-radius:50%;background:' + color + ';color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:' + Math.round(size*0.45) + 'px;font-weight:700;flex:none;font-family:\'Fraunces\',serif;">' + (letter.replace(/[&<>]/g,'') ) + '</span>';
+  }
+
+  const MONTHS = ['Jan','Fév','Mar','Avr','Mai','Jun','Jul','Aoû','Sep','Oct','Nov','Déc'];
+  const MONTH_KEYS = ['01','02','03','04','05','06','07','08','09','10','11','12'];
+  let products = ['Nutriboo','Sugar Vanilla'];
+  let encaissements = [];
+  let decaissements = [];
+  let objectifs = {};
+  let stocks = {};
+  let params = { soldeInitial: 0, seuilAlerte: 0 };
+  let auth = null;
+  let viewerAuth = null;
+  let currentRole = 'admin';
+  let isAdmin = true;
+  let isLoggedIn = false;
+  let fluxChart = null, repartChart = null, soldeChart = null;
+  let objYear = String(new Date().getFullYear());
+
+  const $ = (id) => document.getElementById(id);
+  const fmt = (n) => new Intl.NumberFormat('fr-FR').format(Math.round(n)) + ' FCFA';
+  const todayISO = () => { const d = new Date(); const tz = d.getTimezoneOffset()*60000; return new Date(d-tz).toISOString().slice(0,10); };
+  const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,8);
+  const esc = (s) => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const monthKey = (iso) => iso.slice(0,7);
+  const monthLabel = (key) => { const [y,m] = key.split('-'); return MONTHS[parseInt(m,10)-1] + ' ' + y; };
+
+  async function sha256(text){
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
+  }
+
+  function toast(msg, isErr){
+    const t = $('bgsToast');
+    t.textContent = msg;
+    t.className = 'bgs-toast show' + (isErr ? ' err' : '');
+    clearTimeout(t._timer);
+    t._timer = setTimeout(() => t.classList.remove('show'), 2600);
+  }
+
+  function showConfirm(message, onYes){
+    const wrap = document.createElement('div');
+    wrap.className = 'bgs-modal-overlay';
+    wrap.innerHTML = `<div class="bgs-modal"><p>${esc(message)}</p><div class="actions">
+      <button class="bgs-btn bgs-btn-ghost" data-act="no">Annuler</button>
+      <button class="bgs-btn bgs-btn-out" data-act="yes">Confirmer</button>
+    </div></div>`;
+    $('bgsApp').appendChild(wrap);
+    wrap.addEventListener('click', (e) => {
+      if (e.target === wrap || e.target.dataset.act === 'no') wrap.remove();
+      if (e.target.dataset.act === 'yes') { wrap.remove(); onYes(); }
+    });
+  }
+
+  async function safeGet(key){
+    try { const r = await window.storage.get(key, true); return r ? r.value : null; }
+    catch(e){ return null; }
+  }
+  async function persist(key, value){
+    try { await window.storage.set(key, JSON.stringify(value), true); return true; }
+    catch(e){ console.error(e); toast('Erreur de sauvegarde — vérifiez votre connexion', true); return false; }
+  }
+
+  async function loadAll(){
+    const [p, e, d, a, o, va, st, pm] = await Promise.all([safeGet(K.products), safeGet(K.enc), safeGet(K.dec), safeGet(K.auth), safeGet(K.obj), safeGet(K.viewerAuth), safeGet(K.stocks), safeGet(K.params)]);
+    try { products = p ? JSON.parse(p) : ['Nutriboo','Sugar Vanilla']; } catch(_) { products = ['Nutriboo','Sugar Vanilla']; }
+    try { encaissements = e ? JSON.parse(e) : []; } catch(_) { encaissements = []; }
+    try { decaissements = d ? JSON.parse(d) : []; } catch(_) { decaissements = []; }
+    try { auth = a ? JSON.parse(a) : null; } catch(_) { auth = null; }
+    try { objectifs = o ? JSON.parse(o) : {}; } catch(_) { objectifs = {}; }
+    try { viewerAuth = va ? JSON.parse(va) : null; } catch(_) { viewerAuth = null; }
+    try { stocks = st ? JSON.parse(st) : {}; } catch(_) { stocks = {}; }
+    try { params = pm ? JSON.parse(pm) : { soldeInitial: 0, seuilAlerte: 0 }; } catch(_) { params = { soldeInitial: 0, seuilAlerte: 0 }; }
+  }
+
+  
+  function renderAuthScreen(){
+    $('authOverlay').style.display = 'flex';
+    $('appContent').style.display = 'none';
+    if (!auth) renderSetupForm(); else renderLoginForm();
+  }
+
+  function renderSetupForm(){
+    $('authBody').innerHTML = `
+      <h2>Créer votre accès</h2>
+      <div class="sub">Première utilisation : choisissez un nom d'utilisateur et un mot de passe pour protéger l'application.</div>
+      <form id="setupForm">
+        <div class="bgs-field"><label>Nom d'utilisateur</label><input type="text" id="setupUser" autocomplete="username" required></div>
+        <div class="bgs-field"><label>Mot de passe</label><input type="password" id="setupPw" autocomplete="new-password" minlength="4" required></div>
+        <div class="bgs-field"><label>Confirmer le mot de passe</label><input type="password" id="setupPw2" autocomplete="new-password" minlength="4" required></div>
+        <div class="bgs-auth-err" id="setupErr"></div>
+        <button type="submit" class="bgs-btn bgs-btn-primary bgs-btn-full">Créer mon accès</button>
+      </form>`;
+    $('setupForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const user = $('setupUser').value.trim();
+      const pw = $('setupPw').value, pw2 = $('setupPw2').value;
+      if (!user) { $('setupErr').textContent = "Le nom d'utilisateur est requis."; return; }
+      if (pw.length < 4) { $('setupErr').textContent = 'Le mot de passe doit faire au moins 4 caractères.'; return; }
+      if (pw !== pw2) { $('setupErr').textContent = 'Les mots de passe ne correspondent pas.'; return; }
+      const hash = await sha256(pw);
+      auth = { username: user, hash };
+      const ok = await persist(K.auth, auth);
+      if (ok) { isLoggedIn = true; afterLogin(); }
+      else { $('setupErr').textContent = "Erreur lors de l'enregistrement, réessayez."; }
+    });
+  }
+
+  function renderLoginForm(){
+    $('authBody').innerHTML = `
+      <h2>Connexion</h2>
+      <div class="sub">Application protégée — connectez-vous pour accéder à vos données.</div>
+      <form id="loginForm">
+        <div class="bgs-field"><label>Nom d'utilisateur</label><input type="text" id="loginUser" autocomplete="username" required></div>
+        <div class="bgs-field"><label>Mot de passe</label><input type="password" id="loginPw" autocomplete="current-password" required></div>
+        <div class="bgs-auth-err" id="loginErr"></div>
+        <button type="submit" class="bgs-btn bgs-btn-primary bgs-btn-full">Se connecter</button>
+      </form>`;
+    $('loginForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const user = $('loginUser').value.trim();
+      const pw = $('loginPw').value;
+      const hash = await sha256(pw);
+      if (user.toLowerCase() === auth.username.toLowerCase() && hash === auth.hash) {
+        isLoggedIn = true; currentRole = 'admin'; afterLogin();
+      } else if (viewerAuth && user.toLowerCase() === viewerAuth.username.toLowerCase() && hash === viewerAuth.hash) {
+        isLoggedIn = true; currentRole = 'viewer'; afterLogin();
+      } else {
+        $('loginErr').textContent = 'Identifiants incorrects.';
+      }
+    });
+  }
+
+  function applyRoleUI(){
+    isAdmin = currentRole === 'admin';
+    const perms = isAdmin ? null : (viewerAuth.permissions || {dashboard:true});
+    document.querySelectorAll('#bgsNav button').forEach(b => {
+      const tab = b.dataset.tab;
+      b.style.display = (isAdmin || !!(perms && perms[tab])) ? '' : 'none';
+    });
+    $('changePwBtn').style.display = isAdmin ? '' : 'none';
+    $('viewerAccessBtn').style.display = isAdmin ? '' : 'none';
+    $('roleBadge').style.display = isAdmin ? 'none' : 'inline';
+    
+    const canAddEnc = isAdmin || !!(perms && perms.addEnc);
+    const canAddDec = isAdmin || !!(perms && perms.addDec);
+    [$('encFormCard'), $('encImportCard')].forEach(el => { if (el) el.style.display = canAddEnc ? '' : 'none'; });
+    [$('decFormCard'), $('decImportCard')].forEach(el => { if (el) el.style.display = canAddDec ? '' : 'none'; });
+    if (!isAdmin) {
+      const order = ['dashboard','encaisser','decaisser','objectifs','journal'];
+      const firstAllowed = order.find(t => perms[t]) || 'dashboard';
+      setTab(firstAllowed);
+    }
+  }
+
+  function afterLogin(){
+    $('authOverlay').style.display = 'none';
+    $('appContent').style.display = 'block';
+    $('accountWho').textContent = currentRole === 'admin' ? auth.username : viewerAuth.username;
+    applyRoleUI();
+    renderAll();
+  }
+
+  $('accountBtn').addEventListener('click', () => $('accountMenu').classList.toggle('open'));
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#accountBtn') && !e.target.closest('#accountMenu')) $('accountMenu').classList.remove('open');
+  });
+  $('logoutBtn').addEventListener('click', () => {
+    isLoggedIn = false;
+    $('accountMenu').classList.remove('open');
+    renderAuthScreen();
+  });
+  $('changePwBtn').addEventListener('click', () => {
+    $('accountMenu').classList.remove('open');
+    const wrap = document.createElement('div');
+    wrap.className = 'bgs-modal-overlay';
+    wrap.innerHTML = `<div class="bgs-modal">
+      <h3>Changer le mot de passe</h3>
+      <div class="bgs-field"><label>Mot de passe actuel</label><input type="password" id="cpOld"></div>
+      <div class="bgs-field"><label>Nouveau mot de passe</label><input type="password" id="cpNew" minlength="4"></div>
+      <div class="bgs-field"><label>Confirmer</label><input type="password" id="cpNew2" minlength="4"></div>
+      <div class="bgs-auth-err" id="cpErr"></div>
+      <div class="actions"><button class="bgs-btn bgs-btn-ghost" data-act="cancel">Annuler</button><button class="bgs-btn bgs-btn-primary" data-act="save">Enregistrer</button></div>
+    </div>`;
+    $('bgsApp').appendChild(wrap);
+    wrap.addEventListener('click', async (e) => {
+      if (e.target === wrap || e.target.dataset.act === 'cancel') { wrap.remove(); return; }
+      if (e.target.dataset.act === 'save') {
+        const oldPw = $('cpOld').value, newPw = $('cpNew').value, newPw2 = $('cpNew2').value;
+        const oldHash = await sha256(oldPw);
+        if (oldHash !== auth.hash) { $('cpErr').textContent = 'Mot de passe actuel incorrect.'; return; }
+        if (newPw.length < 4) { $('cpErr').textContent = 'Le nouveau mot de passe doit faire au moins 4 caractères.'; return; }
+        if (newPw !== newPw2) { $('cpErr').textContent = 'Les nouveaux mots de passe ne correspondent pas.'; return; }
+        auth.hash = await sha256(newPw);
+        const ok = await persist(K.auth, auth);
+        if (ok) { wrap.remove(); toast('Mot de passe mis à jour ✓'); }
+        else { $('cpErr').textContent = 'Erreur lors de la sauvegarde.'; }
+      }
+    });
+  });
+
+  $('viewerAccessBtn').addEventListener('click', () => {
+    $('accountMenu').classList.remove('open');
+    const wrap = document.createElement('div');
+    wrap.className = 'bgs-modal-overlay';
+    const p = (viewerAuth && viewerAuth.permissions) || { dashboard:true, encaisser:false, decaisser:false, objectifs:false, journal:false };
+    const statusLine = viewerAuth
+      ? `Accès actif : <b>${esc(viewerAuth.username)}</b>. Modifiez les cases ci-dessous et/ou le mot de passe pour mettre à jour.`
+      : `Aucun accès consultation pour le moment. Créez des identifiants et cochez ce que votre client pourra voir (lecture seule, aucune modification possible).`;
+    wrap.innerHTML = `<div class="bgs-modal">
+      <h3>Accès consultation client</h3>
+      <p style="font-size:12px;color:var(--muted);line-height:1.4;">${statusLine}</p>
+      <div class="bgs-field"><label>Nom d'utilisateur</label><input type="text" id="vaUser" value="${viewerAuth ? esc(viewerAuth.username) : ''}"></div>
+      <div class="bgs-field"><label>Mot de passe</label><input type="password" id="vaPw" minlength="4" placeholder="${viewerAuth ? '(laisser vide pour ne pas changer)' : ''}"></div>
+      <div class="bgs-field"><label>Confirmer</label><input type="password" id="vaPw2" minlength="4"></div>
+      <div class="bgs-field"><label>Ce que le client peut consulter</label>
+        <div style="display:flex;flex-direction:column;gap:7px;font-size:13px;font-weight:500;">
+          <label style="display:flex;align-items:center;gap:8px;"><input type="checkbox" id="permDashboard" ${p.dashboard?'checked':''}> Tableau de bord</label>
+          <label style="display:flex;align-items:center;gap:8px;"><input type="checkbox" id="permEnc" ${p.encaisser?'checked':''}> Encaissements (liste)</label>
+          <label style="display:flex;align-items:center;gap:8px;"><input type="checkbox" id="permDec" ${p.decaisser?'checked':''}> Décaissements (liste)</label>
+          <label style="display:flex;align-items:center;gap:8px;"><input type="checkbox" id="permObj" ${p.objectifs?'checked':''}> Objectifs (lecture seule)</label>
+          <label style="display:flex;align-items:center;gap:8px;"><input type="checkbox" id="permJournal" ${p.journal?'checked':''}> Journal complet</label>
+        </div>
+      </div>
+      <div class="bgs-field" style="border-top:1px solid var(--line);padding-top:10px;"><label>Ce que le client peut saisir</label>
+        <div style="display:flex;flex-direction:column;gap:7px;font-size:13px;font-weight:500;">
+          <label style="display:flex;align-items:center;gap:8px;"><input type="checkbox" id="permAddEnc" ${p.addEnc?'checked':''}> Ajouter des encaissements</label>
+          <label style="display:flex;align-items:center;gap:8px;"><input type="checkbox" id="permAddDec" ${p.addDec?'checked':''}> Ajouter des décaissements</label>
+        </div>
+      </div>
+      <div class="bgs-auth-err" id="vaErr"></div>
+      <div class="actions" style="justify-content:space-between;">
+        ${viewerAuth ? '<button class="bgs-btn bgs-btn-out" data-act="remove">Supprimer cet accès</button>' : '<span></span>'}
+        <div style="display:flex;gap:8px;">
+          <button class="bgs-btn bgs-btn-ghost" data-act="cancel">Annuler</button>
+          <button class="bgs-btn bgs-btn-primary" data-act="save">Enregistrer</button>
+        </div>
+      </div>
+    </div>`;
+    $('bgsApp').appendChild(wrap);
+    wrap.addEventListener('click', async (e) => {
+      if (e.target === wrap || e.target.dataset.act === 'cancel') { wrap.remove(); return; }
+      if (e.target.dataset.act === 'remove') {
+        viewerAuth = null;
+        await persist(K.viewerAuth, null);
+        wrap.remove();
+        toast('Accès consultation supprimé');
+        return;
+      }
+      if (e.target.dataset.act === 'save') {
+        const user = $('vaUser').value.trim(), pw = $('vaPw').value, pw2 = $('vaPw2').value;
+        const permissions = {
+          dashboard: $('permDashboard').checked,
+          encaisser: $('permEnc').checked,
+          decaisser: $('permDec').checked,
+          objectifs: $('permObj').checked,
+          journal: $('permJournal').checked,
+          addEnc: $('permAddEnc').checked,
+          addDec: $('permAddDec').checked
+        };
+        if (!user) { $('vaErr').textContent = "Le nom d'utilisateur est requis."; return; }
+        if (user.toLowerCase() === auth.username.toLowerCase()) { $('vaErr').textContent = 'Choisissez un nom différent de votre propre compte.'; return; }
+        if (!Object.values(permissions).some(Boolean)) { $('vaErr').textContent = 'Cochez au moins une section à autoriser.'; return; }
+        let hash = viewerAuth ? viewerAuth.hash : null;
+        if (pw || !viewerAuth) {
+          if (pw.length < 4) { $('vaErr').textContent = 'Le mot de passe doit faire au moins 4 caractères.'; return; }
+          if (pw !== pw2) { $('vaErr').textContent = 'Les mots de passe ne correspondent pas.'; return; }
+          hash = await sha256(pw);
+        }
+        viewerAuth = { username: user, hash, permissions };
+        const ok = await persist(K.viewerAuth, viewerAuth);
+        if (ok) { wrap.remove(); toast('Accès consultation enregistré ✓'); }
+        else { $('vaErr').textContent = 'Erreur lors de la sauvegarde.'; }
+      }
+    });
+  });
+
+  $('adminParamsBtn').addEventListener('click', () => {
+    $('accountMenu').classList.remove('open');
+    const wrap = document.createElement('div');
+    wrap.className = 'bgs-modal-overlay';
+    wrap.innerHTML = `<div class="bgs-modal">
+      <h3>Paramètres de l'application</h3>
+      <div class="bgs-field"><label>Solde initial de caisse (FCFA)</label><input type="number" min="0" step="1" class="mono" id="paramSolde" value="${params.soldeInitial||0}" placeholder="0"></div>
+      <div class="bgs-field"><label>Alerte solde bas — seuil (FCFA, 0 = désactivé)</label><input type="number" min="0" step="1" class="mono" id="paramSeuil" value="${params.seuilAlerte||0}" placeholder="0"></div>
+      <p style="font-size:11px;color:var(--muted);margin:-4px 0 12px;line-height:1.4;">Si le solde net descend sous ce seuil, une alerte s'affiche sur le tableau de bord. Mettez 0 pour désactiver.</p>
+      <div class="bgs-auth-err" id="paramErr"></div>
+      <div class="actions"><button class="bgs-btn bgs-btn-ghost" data-act="cancel">Annuler</button><button class="bgs-btn bgs-btn-primary" data-act="save">Enregistrer</button></div>
+    </div>`;
+    $('bgsApp').appendChild(wrap);
+    wrap.addEventListener('click', async (e) => {
+      if (e.target === wrap || e.target.dataset.act === 'cancel') { wrap.remove(); return; }
+      if (e.target.dataset.act === 'save') {
+        params.soldeInitial = parseFloat($('paramSolde').value)||0;
+        params.seuilAlerte = parseFloat($('paramSeuil').value)||0;
+        await persist(K.params, params);
+        wrap.remove(); toast('Paramètres enregistrés ✓');
+        renderDashboard();
+      }
+    });
+  });
+
+  
+  function setTab(tab){
+    document.querySelectorAll('#bgsNav button').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+    document.querySelectorAll('.bgs-panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + tab));
+    if (tab === 'dashboard') renderDashboard();
+    if (tab === 'objectifs') renderObjectifsTab();
+    if (tab === 'stocks') renderStocksTab();
+  }
+  $('bgsNav').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-tab]');
+    if (btn) setTab(btn.dataset.tab);
+  });
+  $('storageSettingsBtn').addEventListener('click', () => {
+    $('accountMenu').classList.remove('open');
+    if (window.__bgsOpenStorageSettings) window.__bgsOpenStorageSettings();
+    else toast("Réglages de stockage non disponibles dans cet aperçu.", true);
+  });
+
+  
+  function renderProductChips(){
+    $('productChips').innerHTML = products.map(p =>
+      `<span class="bgs-chip">${productIconHTML(p,16)} ${esc(p)}<button data-p="${esc(p)}" title="Retirer">✕</button></span>`
+    ).join('') || '<span style="font-size:12px;color:var(--muted)">Aucun produit — ajoutez-en un ci-dessous.</span>';
+    const sel = $('encProduct');
+    const prev = sel.value;
+    sel.innerHTML = products.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
+    if (products.includes(prev)) sel.value = prev;
+    updateEncProductPreview();
+  }
+  function updateEncProductPreview(){
+    $('encProductPreview').innerHTML = $('encProduct').value ? productIconHTML($('encProduct').value, 30) : '';
+  }
+  document.addEventListener('change', (e) => { if (e.target.id === 'encProduct') updateEncProductPreview(); });
+  $('productChips').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-p]');
+    if (!btn) return;
+    const name = btn.dataset.p;
+    showConfirm(`Retirer "${name}" de la liste des produits ? (les opérations déjà saisies sont conservées)`, async () => {
+      products = products.filter(p => p !== name);
+      await persist(K.products, products);
+      renderProductChips();
+      toast('Produit retiré');
+    });
+  });
+  $('addProductBtn').addEventListener('click', async () => {
+    const input = $('newProductInput');
+    const name = input.value.trim();
+    if (!name) return;
+    if (products.some(p => p.toLowerCase() === name.toLowerCase())) { toast('Ce produit existe déjà', true); return; }
+    products.push(name);
+    await persist(K.products, products);
+    input.value = '';
+    renderProductChips();
+    toast('Produit ajouté');
+  });
+
+  
+  $('encDate').value = todayISO();
+  $('decDate').value = todayISO();
+
+  let encCategory = 'produit';
+  function setEncCategory(cat){
+    encCategory = cat;
+    $('encCatProduit').classList.toggle('active', cat === 'produit');
+    $('encCatAutre').classList.toggle('active', cat === 'autre');
+    $('encProduitField').style.display = cat === 'produit' ? '' : 'none';
+    $('encAutreField').style.display = cat === 'autre' ? '' : 'none';
+  }
+  $('encCatProduit').addEventListener('click', () => setEncCategory('produit'));
+  $('encCatAutre').addEventListener('click', () => setEncCategory('autre'));
+
+  $('formEnc').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const date = $('encDate').value, amount = parseFloat($('encAmount').value), note = $('encNote').value.trim();
+    if (!date || !(amount > 0)) { toast('Vérifiez les champs', true); return; }
+    let entry;
+    if (encCategory === 'produit') {
+      const product = $('encProduct').value;
+      if (!product) { toast('Vérifiez les champs', true); return; }
+      entry = { id: uid(), date, category: 'produit', product, amount, note };
+    } else {
+      const source = $('encSource').value.trim();
+      if (!source) { toast('Indiquez la source de cet encaissement', true); return; }
+      entry = { id: uid(), date, category: 'autre', source, amount, note };
+    }
+    encaissements.push(entry);
+    const ok = await persist(K.enc, encaissements);
+    if (ok) {
+      toast('Encaissement enregistré ✓');
+      $('encAmount').value = ''; $('encNote').value = ''; $('encSource').value = '';
+      renderRecentEnc(); renderJournalFilters(); renderJournal(); renderDashboard(); renderObjectifsTab();
+    }
+  });
+
+  let decCategory = 'depense';
+  function setDecCategory(cat){
+    decCategory = cat;
+    $('decCatDepense').classList.toggle('active', cat === 'depense');
+    $('decCatSalaire').classList.toggle('active', cat === 'salaire');
+    $('decDescField').style.display = cat === 'depense' ? '' : 'none';
+    $('decBenefField').style.display = cat === 'salaire' ? '' : 'none';
+  }
+  $('decCatDepense').addEventListener('click', () => setDecCategory('depense'));
+  $('decCatSalaire').addEventListener('click', () => setDecCategory('salaire'));
+
+  $('formDec').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const date = $('decDate').value, amount = parseFloat($('decAmount').value);
+    if (!date || !(amount > 0)) { toast('Vérifiez les champs', true); return; }
+    let entry;
+    if (decCategory === 'salaire') {
+      const beneficiaire = $('decBenef').value.trim();
+      if (!beneficiaire) { toast('Indiquez le nom du bénéficiaire', true); return; }
+      entry = { id: uid(), date, category: 'salaire', beneficiaire, amount };
+    } else {
+      const description = $('decDesc').value.trim();
+      if (!description) { toast('Indiquez une description', true); return; }
+      entry = { id: uid(), date, category: 'depense', description, amount };
+    }
+    decaissements.push(entry);
+    const ok = await persist(K.dec, decaissements);
+    if (ok) {
+      toast('Décaissement enregistré ✓');
+      $('decDesc').value = ''; $('decBenef').value = ''; $('decAmount').value = '';
+      renderRecentDec(); renderJournalFilters(); renderJournal(); renderDashboard();
+    }
+  });
+
+  
+  function downloadCSV(filename, rows){
+    const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(';')).join('\n');
+    const blob = new Blob(['\uFEFF'+csv], {type:'text/csv;charset=utf-8;'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+  }
+  function downloadXLSX(filename, rows){
+    if (typeof XLSX === 'undefined') { toast('Le module Excel n\u2019a pas pu se charger (connexion). Réessayez.', true); return; }
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Modèle');
+    XLSX.writeFile(wb, filename);
+  }
+  function stripAccents(s){ return s.normalize('NFD').replace(/[\u0300-\u036f]/g,''); }
+  function parseCSVText(text){
+    const lines = text.replace(/\r/g,'').split('\n').filter(l => l.trim().length);
+    if (!lines.length) return [];
+    const delim = lines[0].includes(';') ? ';' : ',';
+    const headers = lines[0].split(delim).map(h => stripAccents(h.trim().toLowerCase()));
+    return lines.slice(1).map(line => {
+      const cells = line.split(delim).map(c => c.trim().replace(/^"|"$/g,''));
+      const row = {};
+      headers.forEach((h,i) => row[h] = cells[i] !== undefined ? cells[i] : '');
+      return row;
+    });
+  }
+  function excelCellToDateString(v){
+    if (v instanceof Date && !isNaN(v.getTime())) {
+      return String(v.getDate()).padStart(2,'0') + '/' + String(v.getMonth()+1).padStart(2,'0') + '/' + v.getFullYear();
+    }
+    if (typeof v === 'number' && isFinite(v) && v > 1000 && v < 100000) {
+      const utc_days = Math.floor(v - 25569);
+      const d = new Date(utc_days * 86400 * 1000);
+      return String(d.getUTCDate()).padStart(2,'0') + '/' + String(d.getUTCMonth()+1).padStart(2,'0') + '/' + d.getUTCFullYear();
+    }
+    return v != null ? String(v).trim() : '';
+  }
+  function rowsFromAOA(aoa){
+    if (!aoa.length) return [];
+    const headers = aoa[0].map(h => stripAccents(String(h||'').trim().toLowerCase()));
+    const dateColIdx = headers.indexOf('date');
+    return aoa.slice(1)
+      .filter(r => r.some(c => String(c==null?'':c).trim() !== ''))
+      .map(r => {
+        const row = {};
+        headers.forEach((h,i) => {
+          row[h] = (i === dateColIdx) ? excelCellToDateString(r[i]) : (r[i] != null ? String(r[i]).trim() : '');
+        });
+        return row;
+      });
+  }
+  function readFileAsRows(file){
+    return new Promise((resolve, reject) => {
+      const name = file.name.toLowerCase();
+      const isExcel = name.endsWith('.xlsx') || name.endsWith('.xls');
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error || new Error('read-error'));
+      if (isExcel) {
+        reader.onload = () => {
+          try {
+            if (typeof XLSX === 'undefined') { reject(new Error('xlsx-not-loaded')); return; }
+            const wb = XLSX.read(reader.result, { type: 'array', cellDates: true });
+            const sheet = wb.Sheets[wb.SheetNames[0]];
+            const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: '' });
+            resolve(rowsFromAOA(aoa));
+          } catch (e) { reject(e); }
+        };
+        reader.readAsArrayBuffer(file);
+      } else {
+        reader.onload = () => {
+          try { resolve(parseCSVText(String(reader.result))); }
+          catch (e) { reject(e); }
+        };
+        reader.readAsText(file);
+      }
+    });
+  }
+  function parseDateFlexible(s){
+    s = String(s||'').trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+    if (m) return m[3] + '-' + m[2].padStart(2,'0') + '-' + m[1].padStart(2,'0');
+    return null;
+  }
+  function parseAmountFlexible(s){
+    s = String(s||'').trim().replace(/\s|FCFA/gi,'').replace(/,/g,'.');
+    const n = parseFloat(s);
+    return isFinite(n) ? n : NaN;
+  }
+
+  $('downloadEncTemplate').addEventListener('click', () => {
+    downloadXLSX('BGS_modele_encaissements.xlsx', [
+      ['Date','Type','Produit','Source','Montant','Note'],
+      ['01/07/2026','Produit','Sugar Vanilla','','45000','Client boutique Almadies'],
+      ['02/07/2026','Produit','Nutriboo','','29700',''],
+      ['03/07/2026','Autre','','Remboursement prêt M. Diop','100000','']
+    ]);
+  });
+  $('downloadDecTemplate').addEventListener('click', () => {
+    downloadXLSX('BGS_modele_decaissements.xlsx', [
+      ['Date','Type','Description','Bénéficiaire','Montant'],
+      ['01/07/2026','Dépense','Achat emballages','','15000'],
+      ['02/07/2026','Dépense','Transport','','5000'],
+      ['30/06/2026','Salaire','','Aminata Sow','120000']
+    ]);
+  });
+
+  $('importEncBtn').addEventListener('click', () => $('importEncFile').click());
+  $('importDecBtn').addEventListener('click', () => $('importDecFile').click());
+
+  $('importEncFile').addEventListener('change', (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    readFileAsRows(file).then(async (rows) => {
+      let added = 0, skipped = 0, newProducts = [];
+      rows.forEach(r => {
+        const date = parseDateFlexible(r['date']);
+        const amount = parseAmountFlexible(r['montant']);
+        const note = (r['note']||'').trim();
+        const isAutre = (r['type']||'').trim().toLowerCase().startsWith('autre');
+        if (!date || !(amount > 0)) { skipped++; return; }
+        if (isAutre) {
+          const source = (r['source']||'').trim();
+          if (!source) { skipped++; return; }
+          encaissements.push({ id: uid(), date, category: 'autre', source, amount, note });
+          added++;
+        } else {
+          const product = (r['produit']||'').trim();
+          if (!product) { skipped++; return; }
+          if (!products.some(p => p.toLowerCase() === product.toLowerCase())) { products.push(product); newProducts.push(product); }
+          encaissements.push({ id: uid(), date, category: 'produit', product, amount, note });
+          added++;
+        }
+      });
+      if (newProducts.length) await persist(K.products, products);
+      if (added) await persist(K.enc, encaissements);
+      $('importEncResult').innerHTML = added
+        ? `✅ ${added} encaissement(s) importé(s)${skipped?(' · ⚠️ '+skipped+' ligne(s) ignorée(s)'):''}${newProducts.length?(' · nouveaux produits ajoutés : '+newProducts.join(', ')):''}`
+        : `⚠️ Aucune ligne valide trouvée. Vérifiez que les colonnes correspondent au modèle (Date, Type, Produit, Source, Montant, Note).`;
+      renderProductChips(); renderRecentEnc(); renderJournalFilters(); renderJournal(); renderDashboard(); renderObjectifsTab();
+      toast(added ? added + ' encaissement(s) importé(s) ✓' : 'Import sans résultat', !added);
+      e.target.value = '';
+    }).catch((err) => {
+      console.error(err);
+      $('importEncResult').innerHTML = `⚠️ Impossible de lire ce fichier. Utilisez le modèle téléchargé sans changer l'ordre des colonnes.`;
+      toast('Erreur de lecture du fichier', true);
+      e.target.value = '';
+    });
+  });
+
+  $('importDecFile').addEventListener('change', (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    readFileAsRows(file).then(async (rows) => {
+      let added = 0, skipped = 0;
+      rows.forEach(r => {
+        const date = parseDateFlexible(r['date']);
+        const amount = parseAmountFlexible(r['montant']);
+        if (!date || !(amount > 0)) { skipped++; return; }
+        const isSalaire = (r['type']||'').trim().toLowerCase().startsWith('salaire');
+        if (isSalaire) {
+          const beneficiaire = (r['bénéficiaire']||r['beneficiaire']||'').trim();
+          if (!beneficiaire) { skipped++; return; }
+          decaissements.push({ id: uid(), date, category: 'salaire', beneficiaire, amount });
+        } else {
+          const description = (r['description']||'').trim();
+          if (!description) { skipped++; return; }
+          decaissements.push({ id: uid(), date, category: 'depense', description, amount });
+        }
+        added++;
+      });
+      if (added) await persist(K.dec, decaissements);
+      $('importDecResult').innerHTML = added
+        ? `✅ ${added} décaissement(s) importé(s)${skipped?(' · ⚠️ '+skipped+' ligne(s) ignorée(s)'):''}`
+        : `⚠️ Aucune ligne valide trouvée. Vérifiez que les colonnes correspondent au modèle (Date, Description, Montant).`;
+      renderRecentDec(); renderJournalFilters(); renderJournal(); renderDashboard();
+      toast(added ? added + ' décaissement(s) importé(s) ✓' : 'Import sans résultat', !added);
+      e.target.value = '';
+    }).catch((err) => {
+      console.error(err);
+      $('importDecResult').innerHTML = `⚠️ Impossible de lire ce fichier. Utilisez le modèle téléchargé sans changer l'ordre des colonnes.`;
+      toast('Erreur de lecture du fichier', true);
+      e.target.value = '';
+    });
+  });
+
+  
+  function openEditModal(type, id){
+    const isIn = type === 'in';
+    const tx = isIn ? encaissements.find(x=>x.id===id) : decaissements.find(x=>x.id===id);
+    if (!tx) return;
+
+    const wrap = document.createElement('div');
+    wrap.className = 'bgs-modal-overlay';
+    let formHtml = '';
+    if (isIn) {
+      if ((tx.category||'produit') === 'produit') {
+        const opts = products.map(p=>`<option value="${esc(p)}" ${p===tx.product?'selected':''}>${esc(p)}</option>`).join('');
+        formHtml = `
+          <div class="bgs-field"><label>Date</label><input type="date" id="editDate" value="${tx.date}"></div>
+          <div class="bgs-field"><label>Produit</label><select id="editProd">${opts}</select></div>
+          <div class="bgs-field"><label>Montant (FCFA)</label><input type="number" class="mono" id="editAmount" value="${tx.amount}" min="1" step="1"></div>
+          <div class="bgs-field"><label>Note</label><input type="text" id="editNote" value="${esc(tx.note||'')}"></div>`;
+      } else {
+        formHtml = `
+          <div class="bgs-field"><label>Date</label><input type="date" id="editDate" value="${tx.date}"></div>
+          <div class="bgs-field"><label>Source</label><input type="text" id="editSource" value="${esc(tx.source||'')}"></div>
+          <div class="bgs-field"><label>Montant (FCFA)</label><input type="number" class="mono" id="editAmount" value="${tx.amount}" min="1" step="1"></div>`;
+      }
+    } else {
+      if ((tx.category||'depense') === 'salaire') {
+        formHtml = `
+          <div class="bgs-field"><label>Date</label><input type="date" id="editDate" value="${tx.date}"></div>
+          <div class="bgs-field"><label>Bénéficiaire</label><input type="text" id="editBenef" value="${esc(tx.beneficiaire||'')}"></div>
+          <div class="bgs-field"><label>Montant (FCFA)</label><input type="number" class="mono" id="editAmount" value="${tx.amount}" min="1" step="1"></div>`;
+      } else {
+        formHtml = `
+          <div class="bgs-field"><label>Date</label><input type="date" id="editDate" value="${tx.date}"></div>
+          <div class="bgs-field"><label>Description</label><input type="text" id="editDesc" value="${esc(tx.description||'')}"></div>
+          <div class="bgs-field"><label>Montant (FCFA)</label><input type="number" class="mono" id="editAmount" value="${tx.amount}" min="1" step="1"></div>`;
+      }
+    }
+
+    wrap.innerHTML = `<div class="bgs-modal">
+      <h3>Modifier l'opération</h3>
+      ${formHtml}
+      <div class="bgs-auth-err" id="editErr"></div>
+      <div class="actions">
+        <button class="bgs-btn bgs-btn-ghost" data-act="cancel">Annuler</button>
+        <button class="bgs-btn bgs-btn-primary" data-act="save">Enregistrer</button>
+      </div>
+    </div>`;
+    $('bgsApp').appendChild(wrap);
+
+    wrap.addEventListener('click', async (e) => {
+      if (e.target === wrap || e.target.dataset.act === 'cancel') { wrap.remove(); return; }
+      if (e.target.dataset.act !== 'save') return;
+
+      const date = $('editDate').value;
+      const amount = parseFloat($('editAmount').value);
+      if (!date || !(amount > 0)) { $('editErr').textContent = 'Date et montant requis.'; return; }
+
+      if (isIn) {
+        const idx = encaissements.findIndex(x=>x.id===id);
+        if ((tx.category||'produit') === 'produit') {
+          encaissements[idx] = {...tx, date, product: $('editProd').value, amount, note: ($('editNote')||{value:''}).value.trim()};
+        } else {
+          encaissements[idx] = {...tx, date, source: $('editSource').value.trim(), amount};
+        }
+        await persist(K.enc, encaissements);
+      } else {
+        const idx = decaissements.findIndex(x=>x.id===id);
+        if ((tx.category||'depense') === 'salaire') {
+          decaissements[idx] = {...tx, date, beneficiaire: $('editBenef').value.trim(), amount};
+        } else {
+          decaissements[idx] = {...tx, date, description: $('editDesc').value.trim(), amount};
+        }
+        await persist(K.dec, decaissements);
+      }
+      wrap.remove();
+      toast('Opération mise à jour ✓');
+      renderRecentEnc(); renderRecentDec(); renderJournal(); renderDashboard();
+    });
+  }
+
+  function editHandler(e){
+    const btn = e.target.closest('button[data-edit]');
+    if (!btn) return;
+    openEditModal(btn.dataset.edit, btn.dataset.id);
+  }
+
+  
+  async function deleteTx(type, id){
+    if (type === 'in') { encaissements = encaissements.filter(x => x.id !== id); await persist(K.enc, encaissements); }
+    else { decaissements = decaissements.filter(x => x.id !== id); await persist(K.dec, decaissements); }
+    toast('Opération supprimée');
+    renderAll();
+  }
+
+  function txRow(tx, type, withDelete){
+    const isIn = type === 'in';
+    const isAutreEnc = isIn && tx.category === 'autre';
+    const isSalaire = !isIn && tx.category === 'salaire';
+    const title = isIn
+      ? (isAutreEnc ? tx.source : tx.product)
+      : (isSalaire ? tx.beneficiaire : tx.description);
+    const badge = isSalaire ? '<span style="font-size:9.5px;font-weight:700;background:var(--accent-soft);color:#7A5217;padding:1px 6px;border-radius:99px;margin-left:5px;">SALAIRE</span>' : '';
+    const sub = (tx.note ? esc(tx.note) + ' · ' : '') + tx.date.split('-').reverse().join('/');
+    let iconHtml;
+    if (isIn && isAutreEnc) {
+      iconHtml = `<div class="ic in"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="2" y="6" width="20" height="13" rx="2"/><circle cx="12" cy="12.5" r="3"/></svg></div>`;
+    } else if (isSalaire) {
+      iconHtml = `<div class="ic out"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/></svg></div>`;
+    } else if (isIn && PRODUCT_LOGOS[String(tx.product).trim().toLowerCase()]) {
+      iconHtml = `<div style="width:30px;height:30px;border-radius:50%;overflow:hidden;flex:none;">${productIconHTML(tx.product,30)}</div>`;
+    } else {
+      const icon = isIn
+        ? '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 19V5M5 12l7-7 7 7"/></svg>'
+        : '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12l7 7 7-7"/></svg>';
+      iconHtml = `<div class="ic ${isIn?'in':'out'}">${icon}</div>`;
+    }
+    return `<div class="bgs-tx">
+      ${iconHtml}
+      <div class="meta"><div class="t1">${esc(title)}${badge}</div><div class="t2">${sub}</div></div>
+      <div class="amt ${isIn?'in':'out'} mono">${isIn?'+':'-'}${fmt(tx.amount)}</div>
+      ${withDelete ? `
+        <button class="del" data-edit="${type}" data-id="${tx.id}" title="Modifier" style="color:var(--muted);opacity:.55;"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
+        <button class="del" data-type="${type}" data-id="${tx.id}" title="Supprimer"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg></button>
+      ` : ''}
+    </div>`;
+  }
+
+  function allTx(){
+    return [
+      ...encaissements.map(x => ({...x, type:'in'})),
+      ...decaissements.map(x => ({...x, type:'out'}))
+    ].sort((a,b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
+  }
+
+  function renderRecentEnc(){
+    const list = [...encaissements].sort((a,b)=>b.date.localeCompare(a.date)||b.id.localeCompare(a.id)).slice(0,8);
+    $('recentEnc').innerHTML = list.length ? list.map(x=>txRow(x,'in',isAdmin)).join('') : '<div class="bgs-empty">Aucun encaissement pour le moment.</div>';
+  }
+  function renderRecentDec(){
+    const list = [...decaissements].sort((a,b)=>b.date.localeCompare(a.date)||b.id.localeCompare(a.id)).slice(0,8);
+    $('recentDec').innerHTML = list.length ? list.map(x=>txRow(x,'out',isAdmin)).join('') : '<div class="bgs-empty">Aucun décaissement pour le moment.</div>';
+  }
+  $('recentEnc').addEventListener('click', delHandler);
+  $('recentEnc').addEventListener('click', editHandler);
+  $('recentDec').addEventListener('click', delHandler);
+  $('recentDec').addEventListener('click', editHandler);
+  function delHandler(e){
+    const btn = e.target.closest('button.del');
+    if (!btn) return;
+    showConfirm('Supprimer cette opération ?', () => deleteTx(btn.dataset.type, btn.dataset.id));
+  }
+
+  
+  function renderJournalFilters(){
+    const months = Array.from(new Set(allTx().map(x => monthKey(x.date)))).sort().reverse();
+    const sel = $('filterMonth');
+    const prev = sel.value;
+    sel.innerHTML = '<option value="all">Tous les mois</option>' + months.map(m => `<option value="${m}">${monthLabel(m)}</option>`).join('');
+    if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
+  }
+  function renderJournal(){
+    const monthF = $('filterMonth').value, typeF = $('filterType').value;
+    let list = allTx();
+    if (monthF !== 'all') list = list.filter(x => monthKey(x.date) === monthF);
+    if (typeF !== 'all') list = list.filter(x => x.type === typeF);
+    $('journalList').innerHTML = list.length ? list.map(x => txRow(x, x.type, isAdmin)).join('') : '<div class="bgs-empty">Aucune opération pour ces filtres.</div>';
+  }
+  $('journalList').addEventListener('click', delHandler);
+  $('journalList').addEventListener('click', editHandler);
+  $('filterMonth').addEventListener('change', renderJournal);
+  $('filterType').addEventListener('change', renderJournal);
+
+  $('exportBtn').addEventListener('click', () => {
+    const monthF = $('filterMonth').value, typeF = $('filterType').value;
+    let list = allTx();
+    if (monthF !== 'all') list = list.filter(x => monthKey(x.date) === monthF);
+    if (typeF !== 'all') list = list.filter(x => x.type === typeF);
+    const rows = [['Date','Type','Produit/Description','Montant FCFA','Note']];
+    list.forEach(x => {
+      let label, type;
+      if (x.type === 'in') {
+        type = 'Encaissement';
+        label = x.category === 'autre' ? x.source : x.product;
+      } else {
+        type = x.category === 'salaire' ? 'Salaire' : 'Décaissement';
+        label = x.category === 'salaire' ? x.beneficiaire : x.description;
+      }
+      rows.push([x.date.split('-').reverse().join('/'), type, label, x.amount, x.note||'']);
+    });
+    downloadXLSX('BGS_journal_' + todayISO() + '.xlsx', rows);
+  });
+
+  
+  function renderObjectifsTab(){
+    const years = new Set([new Date().getFullYear().toString()]);
+    allTx().forEach(x => years.add(x.date.slice(0,4)));
+    Object.keys(objectifs).forEach(k => years.add(k.slice(0,4)));
+    const yearList = Array.from(years).sort();
+    const sel = $('objYear');
+    if (!sel.dataset.bound) {
+      sel.addEventListener('change', () => { objYear = sel.value; renderObjectifsTable(); });
+      sel.dataset.bound = '1';
+    }
+    sel.innerHTML = yearList.map(y => `<option value="${y}">${y}</option>`).join('');
+    if (yearList.includes(objYear)) sel.value = objYear; else { objYear = yearList[yearList.length-1]; sel.value = objYear; }
+    renderObjectifsTable();
+  }
+
+  function renderObjectifsTable(){
+    const table = $('objTable');
+    if (!products.length) {
+      table.innerHTML = `<tr><td style="padding:14px 4px;color:var(--muted);">Ajoutez au moins un produit (onglet Encaissement) pour définir des objectifs.</td></tr>`;
+      return;
+    }
+    let head = '<thead><tr><th>Mois</th>' + products.map(p => `<th>Obj. ${esc(p)}</th>`).join('') + '<th>Total objectif</th><th>Réalisé</th><th>% Atteinte</th></tr></thead>';
+    let body = '<tbody>';
+    MONTH_KEYS.forEach((mk, idx) => {
+      const key = objYear + '-' + mk;
+      const monthObj = objectifs[key] || {};
+      const totalObj = products.reduce((s,p) => s + (parseFloat(monthObj[p]) || 0), 0);
+      const realise = encaissements.filter(x => monthKey(x.date) === key && (x.category||'produit') === 'produit').reduce((s,x) => s + x.amount, 0);
+      const pct = totalObj > 0 ? (realise/totalObj*100) : (realise > 0 ? 100 : 0);
+      const pctClass = pct >= 100 ? 'high' : pct >= 50 ? 'mid' : 'low';
+      const barColor = pct >= 100 ? 'var(--income)' : pct >= 50 ? 'var(--accent)' : 'var(--expense)';
+      body += `<tr><td><b>${MONTHS[idx]}</b></td>`;
+      products.forEach(p => {
+        body += `<td><input type="number" min="0" step="1" class="mono" data-month="${key}" data-product="${esc(p)}" value="${monthObj[p] != null ? monthObj[p] : ''}" placeholder="0" ${isAdmin?'':'disabled'}></td>`;
+      });
+      body += `<td class="mono">${fmt(totalObj)}</td><td class="mono">${fmt(realise)}</td>`;
+      body += `<td><span class="bgs-progress"><div style="width:${Math.min(100,pct)}%;background:${barColor};"></div></span><span class="bgs-pct ${pctClass}">${Math.round(pct)}%</span></td></tr>`;
+    });
+    body += '</tbody>';
+    table.innerHTML = head + body;
+  }
+  $('objTable').addEventListener('change', async (e) => {
+    const input = e.target.closest('input[data-month]');
+    if (!input) return;
+    const key = input.dataset.month, product = input.dataset.product;
+    const val = parseFloat(input.value);
+    objectifs[key] = objectifs[key] || {};
+    if (val > 0) objectifs[key][product] = val; else delete objectifs[key][product];
+    await persist(K.obj, objectifs);
+    renderObjectifsTable();
+  });
+
+  
+  function renderDashboard(){
+    const totalIn = encaissements.reduce((s,x)=>s+x.amount,0);
+    const totalOut = decaissements.reduce((s,x)=>s+x.amount,0);
+    const solde = (params.soldeInitial||0) + totalIn - totalOut;
+
+    
+    const curM = currentMonthKey(), prevM = prevMonthKey();
+    const curIn  = encaissements.filter(x=>monthKey(x.date)===curM).reduce((s,x)=>s+x.amount,0);
+    const prevIn = encaissements.filter(x=>monthKey(x.date)===prevM).reduce((s,x)=>s+x.amount,0);
+    const curOut  = decaissements.filter(x=>monthKey(x.date)===curM).reduce((s,x)=>s+x.amount,0);
+    const prevOut = decaissements.filter(x=>monthKey(x.date)===prevM).reduce((s,x)=>s+x.amount,0);
+
+    $('statIn').innerHTML = fmt(totalIn) + trendBadge(curIn, prevIn);
+    $('statOut').innerHTML = fmt(totalOut) + trendBadge(curOut, prevOut);
+    $('statSolde').textContent = (solde<0?'-':'+') + fmt(Math.abs(solde));
+    $('statSoldeWrap').className = 'bgs-stat ' + (solde>=0?'solde-pos':'solde-neg');
+
+    
+    const seuil = params.seuilAlerte||0;
+    const alerteEl = $('alerteBanderol');
+    if (seuil > 0 && solde < seuil) {
+      alerteEl.style.display = 'block';
+      alerteEl.innerHTML = `⚠️ Alerte : solde net (${fmt(solde)}) sous le seuil d'alerte (${fmt(seuil)})`;
+    } else {
+      alerteEl.style.display = 'none';
+    }
+
+    const totalSalaires = decaissements.filter(x => x.category === 'salaire').reduce((s,x)=>s+x.amount,0);
+    const totalDepenses = decaissements.filter(x => (x.category||'depense') !== 'salaire').reduce((s,x)=>s+x.amount,0);
+    const breakdownDec = totalSalaires > 0
+      ? `<div style="font-size:11.5px;color:var(--muted);margin-top:4px;">Dont salaires : <b>${fmt(totalSalaires)}</b> · Autres dépenses : <b>${fmt(totalDepenses)}</b></div>`
+      : '';
+    const produitEnc = encaissements.filter(x => (x.category||'produit') === 'produit');
+    const autreEnc = encaissements.filter(x => (x.category||'produit') === 'autre');
+    const totalCA = produitEnc.reduce((s,x)=>s+x.amount,0);
+    const totalAutres = autreEnc.reduce((s,x)=>s+x.amount,0);
+
+    const byProduct = {};
+    produitEnc.forEach(x => byProduct[x.product] = (byProduct[x.product]||0) + x.amount);
+    const leaderEntry = Object.entries(byProduct).sort((a,b)=>b[1]-a[1])[0];
+    const breakdownLine = totalAutres > 0
+      ? `<div style="font-size:11.5px;color:var(--muted);margin-top:4px;">Dont chiffre d'affaires produits : <b>${fmt(totalCA)}</b> · Autres encaissements (prêts, apports…) : <b>${fmt(totalAutres)}</b></div>`
+      : '';
+    $('leaderLine').innerHTML = (leaderEntry
+      ? `<span class="bgs-badge leader">Produit leader</span> &nbsp; ${productIconHTML(leaderEntry[0],18)} <b>${esc(leaderEntry[0])}</b> — ${fmt(leaderEntry[1])} encaissés au total`
+      : 'Pas encore assez de données pour identifier un produit leader.') + breakdownLine + breakdownDec;
+
+    const recent = allTx().slice(0,8);
+    $('recentList').innerHTML = recent.length ? recent.map(x=>txRow(x,x.type,false)).join('') : '<div class="bgs-empty">Aucune opération enregistrée pour le moment. Commencez par un encaissement ou un décaissement.</div>';
+
+    renderFluxChart();
+    renderRepartChart(byProduct);
+    renderSoldeChart();
+  }
+
+  function renderFluxChart(){
+    const months = Array.from(new Set([...encaissements, ...decaissements].map(x => monthKey(x.date)))).sort().slice(-12);
+    const ctx = $('chartFlux');
+    if (typeof Chart === 'undefined') { ctx.style.display='none'; $('emptyFlux').style.display='block'; $('emptyFlux').textContent = "Le graphique n'a pas pu se charger (connexion lente ou bloquée). Rechargez la page."; return; }
+    if (!months.length){ ctx.style.display='none'; $('emptyFlux').style.display='block'; if(fluxChart){fluxChart.destroy();fluxChart=null;} return; }
+    ctx.style.display='block'; $('emptyFlux').style.display='none';
+    const inData = months.map(m => encaissements.filter(x=>monthKey(x.date)===m).reduce((s,x)=>s+x.amount,0));
+    const outData = months.map(m => decaissements.filter(x=>monthKey(x.date)===m).reduce((s,x)=>s+x.amount,0));
+    const data = {
+      labels: months.map(monthLabel),
+      datasets: [
+        { label: 'Encaissements', data: inData, backgroundColor: '#2E7D52', borderRadius: 5, maxBarThickness: 26 },
+        { label: 'Décaissements', data: outData, backgroundColor: '#B5432F', borderRadius: 5, maxBarThickness: 26 }
+      ]
+    };
+    if (fluxChart) { fluxChart.data = data; fluxChart.update(); return; }
+    fluxChart = new Chart(ctx, {
+      type: 'bar',
+      data,
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { font: { family: 'IBM Plex Sans', size: 11 }, boxWidth: 10, usePointStyle: true } } },
+        scales: {
+          y: { ticks: { font: { family: 'IBM Plex Mono', size: 10 }, callback: v => (v/1000)+'k' }, grid: { color: '#EAEFE7' } },
+          x: { ticks: { font: { family: 'IBM Plex Sans', size: 11 } }, grid: { display: false } }
+        }
+      }
+    });
+  }
+
+  function renderRepartChart(byProduct){
+    const ctx = $('chartRepartition');
+    if (typeof Chart === 'undefined') { ctx.style.display='none'; $('emptyRepartition').style.display='block'; $('emptyRepartition').textContent = "Le graphique n'a pas pu se charger (connexion lente ou bloquée). Rechargez la page."; return; }
+    const entries = Object.entries(byProduct).filter(([,v])=>v>0);
+    if (!entries.length){ ctx.style.display='none'; $('emptyRepartition').style.display='block'; if(repartChart){repartChart.destroy();repartChart=null;} return; }
+    ctx.style.display='block'; $('emptyRepartition').style.display='none';
+    const palette = ['#1F4D3F','#C98A3B','#5E9C8B','#E0AE5E','#7A5217','#94B3A6'];
+    const data = {
+      labels: entries.map(e=>e[0]),
+      datasets: [{ data: entries.map(e=>e[1]), backgroundColor: entries.map((_,i)=>palette[i%palette.length]), borderWidth: 2, borderColor: '#fff' }]
+    };
+    if (repartChart) { repartChart.data = data; repartChart.update(); return; }
+    repartChart = new Chart(ctx, {
+      type: 'doughnut',
+      data,
+      options: {
+        responsive: true, maintainAspectRatio: false, cutout: '62%',
+        plugins: { legend: { position: 'bottom', labels: { font: { family: 'IBM Plex Sans', size: 11 }, boxWidth: 10, usePointStyle: true } } }
+      }
+    });
+  }
+
+  
+  function currentMonthKey(){ return todayISO().slice(0,7); }
+  function prevMonthKey(){ const d = new Date(); d.setMonth(d.getMonth()-1); return d.toISOString().slice(0,7); }
+  function trendBadge(current, prev){
+    if (!prev) return '';
+    const pct = Math.round((current - prev) / prev * 100);
+    const cls = pct > 0 ? 'up' : pct < 0 ? 'down' : 'neu';
+    const sign = pct > 0 ? '+' : '';
+    return `<span class="bgs-trend ${cls}">${sign}${pct}%</span>`;
+  }
+
+  
+  function renderSoldeChart(){
+    const months = Array.from(new Set([...encaissements, ...decaissements].map(x => monthKey(x.date)))).sort();
+    const ctx = $('chartSolde');
+    if (!months.length || typeof Chart === 'undefined') {
+      ctx.style.display='none'; $('emptySolde').style.display='block';
+      if(soldeChart){soldeChart.destroy();soldeChart=null;} return;
+    }
+    ctx.style.display='block'; $('emptySolde').style.display='none';
+    let running = params.soldeInitial || 0;
+    const data = months.map(m => {
+      running += encaissements.filter(x=>monthKey(x.date)===m).reduce((s,x)=>s+x.amount,0);
+      running -= decaissements.filter(x=>monthKey(x.date)===m).reduce((s,x)=>s+x.amount,0);
+      return running;
+    });
+    const chartData = { labels: months.map(monthLabel), datasets: [{
+      label: 'Solde net', data,
+      borderColor: '#1F4D3F', backgroundColor: 'rgba(31,77,63,0.1)',
+      fill: true, tension: 0.4, pointBackgroundColor: '#1F4D3F', pointRadius: 4
+    }]};
+    if (soldeChart) { soldeChart.data = chartData; soldeChart.update(); return; }
+    soldeChart = new Chart(ctx, { type:'line', data: chartData, options:{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{ display:false } },
+      scales:{
+        y:{ ticks:{ font:{family:'IBM Plex Mono',size:10}, callback: v=>(v/1000)+'k' }, grid:{color:'#EAEFE7'} },
+        x:{ ticks:{ font:{family:'IBM Plex Sans',size:11} }, grid:{display:false} }
+      }
+    }});
+  }
+
+  
+  function renderStocksTab(){
+    
+    $('stocksParamList').innerHTML = products.map(p => {
+      const s = stocks[p] || { prixUnitaire: 0, stockInitial: 0 };
+      return `<div class="bgs-stock-input-row">
+        ${productIconHTML(p, 28)}
+        <label>${esc(p)}</label>
+        <div style="display:flex;flex-direction:column;gap:5px;align-items:flex-end;">
+          <div style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--muted);">Prix unit. <input type="number" min="0" step="1" class="mono" data-stock-prod="${esc(p)}" data-stock-field="prixUnitaire" value="${s.prixUnitaire||''}" placeholder="0"></div>
+          <div style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--muted);">Stock init. <input type="number" min="0" step="1" class="mono" data-stock-prod="${esc(p)}" data-stock-field="stockInitial" value="${s.stockInitial||''}" placeholder="0"></div>
+        </div>
+      </div>`;
+    }).join('') || '<div class="bgs-empty">Ajoutez des produits depuis l\'onglet Encaissement.</div>';
+
+    
+    $('stocksBoard').innerHTML = products.length
+      ? products.map(p => {
+          const s = stocks[p] || { prixUnitaire: 0, stockInitial: 0 };
+          const totalVentes = encaissements.filter(x=>(x.category||'produit')==='produit' && x.product===p).reduce((sum,x)=>sum+x.amount,0);
+          const unitesVendues = s.prixUnitaire > 0 ? Math.round(totalVentes / s.prixUnitaire) : '—';
+          const stockActuel = s.prixUnitaire > 0 ? Math.max(0, (s.stockInitial||0) - Math.round(totalVentes/s.prixUnitaire)) : '—';
+          const pct = (s.stockInitial > 0 && typeof stockActuel === 'number') ? Math.round(stockActuel/s.stockInitial*100) : 100;
+          const barColor = pct > 30 ? 'var(--income)' : pct > 10 ? 'var(--accent)' : 'var(--expense)';
+          const alerteStock = typeof stockActuel === 'number' && stockActuel <= Math.max(5, (s.stockInitial||0)*0.1);
+          return `<div class="bgs-stock-row">
+            ${productIconHTML(p, 30)}
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:13.5px;font-weight:600;">${esc(p)} ${alerteStock?'<span style="color:var(--expense);font-size:10px;font-weight:700;">⚠ Stock bas</span>':''}</div>
+              <div style="font-size:11.5px;color:var(--muted);">Vendu : ${fmt(totalVentes)} · Unités vendues : ${unitesVendues}</div>
+            </div>
+            <div style="text-align:right;">
+              <div style="font-size:15px;font-weight:700;">${stockActuel}</div>
+              <div class="bgs-stock-bar-wrap" style="width:60px;"><div class="bgs-stock-bar" style="width:${pct}%;background:${barColor};"></div></div>
+            </div>
+          </div>`;
+        }).join('')
+      : '<div class="bgs-empty">Aucun produit configuré.</div>';
+  }
+
+  $('stocksParamList').addEventListener('change', async (e) => {
+    const inp = e.target.closest('input[data-stock-prod]');
+    if (!inp) return;
+    const prod = inp.dataset.stockProd, field = inp.dataset.stockField;
+    if (!stocks[prod]) stocks[prod] = { prixUnitaire: 0, stockInitial: 0 };
+    stocks[prod][field] = parseFloat(inp.value) || 0;
+    await persist(K.stocks, stocks);
+    renderStocksTab();
+  });
+
+  
+  $('exportPdfBtn').addEventListener('click', () => {
+    if (typeof jspdf === 'undefined' && typeof window.jspdf === 'undefined') {
+      toast('Le module PDF n\'a pas pu se charger (connexion lente). Réessayez.', true); return;
+    }
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ unit:'mm', format:'a4' });
+    const monthF = $('filterMonth').value;
+    const periodLabel = monthF !== 'all' ? monthLabel(monthF) : 'Tous les mois';
+    let list = allTx();
+    if (monthF !== 'all') list = list.filter(x => monthKey(x.date) === monthF);
+
+    const totalIn = list.filter(x=>x.type==='in').reduce((s,x)=>s+x.amount,0);
+    const totalOut = list.filter(x=>x.type==='out').reduce((s,x)=>s+x.amount,0);
+    const solde = totalIn - totalOut;
+
+    
+    doc.setFillColor(31,77,63);
+    doc.rect(0,0,210,32,'F');
+    doc.setTextColor(255,255,255);
+    doc.setFont('helvetica','bold');
+    doc.setFontSize(16);
+    doc.text('BINETA GLOBAL SERVICES', 14, 13);
+    doc.setFontSize(10);
+    doc.setFont('helvetica','normal');
+    doc.text('Rapport de trésorerie — ' + periodLabel, 14, 20);
+    doc.text('Généré le ' + todayISO().split('-').reverse().join('/'), 14, 27);
+
+    
+    doc.setTextColor(22,36,31);
+    doc.setFont('helvetica','bold');
+    doc.setFontSize(11);
+    doc.text('Résumé', 14, 42);
+    doc.setFont('helvetica','normal');
+    doc.setFontSize(10);
+    doc.text('Encaissements : ' + totalIn.toLocaleString('fr-FR') + ' FCFA', 14, 50);
+    doc.text('Décaissements : ' + totalOut.toLocaleString('fr-FR') + ' FCFA', 14, 57);
+    doc.setFont('helvetica','bold');
+    doc.text('Solde net : ' + (solde>=0?'+':'') + solde.toLocaleString('fr-FR') + ' FCFA', 14, 64);
+
+    
+    const rows = list.map(x => {
+      const label = x.type==='in' ? (x.category==='autre'?x.source:x.product) : (x.category==='salaire'?x.beneficiaire:x.description);
+      const type = x.type==='in'?'Encaissement':(x.category==='salaire'?'Salaire':'Décaissement');
+      return [x.date.split('-').reverse().join('/'), type, label, (x.type==='in'?'+':'-') + x.amount.toLocaleString('fr-FR') + ' FCFA'];
+    });
+
+    doc.autoTable({
+      startY: 72,
+      head: [['Date','Type','Libellé','Montant']],
+      body: rows,
+      styles: { fontSize: 8, font: 'helvetica' },
+      headStyles: { fillColor:[31,77,63], textColor:255, fontStyle:'bold' },
+      alternateRowStyles: { fillColor:[238,242,236] },
+      columnStyles: { 3: { halign:'right' } }
+    });
+
+    doc.save('BGS_rapport_' + (monthF!=='all'?monthF:todayISO().slice(0,7)) + '.pdf');
+    toast('Rapport PDF généré ✓');
+  });
+
+  function renderAll(){
+    renderProductChips();
+    renderRecentEnc();
+    renderRecentDec();
+    renderJournalFilters();
+    renderJournal();
+    renderDashboard();
+    renderObjectifsTab();
+    renderStocksTab();
+  }
+
+  loadAll().then(renderAuthScreen);
+})();
+</script>
+
+<script>
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.getRegistrations().then(regs => {
+    regs.forEach(r => r.unregister());
+  });
+}
+</script>
+</body>
+</html>
