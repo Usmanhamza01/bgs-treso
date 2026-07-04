@@ -52,7 +52,22 @@
   
   const SCOPE = 'https://www.googleapis.com/auth/drive';
 
-  function hideOverlay(resolveNow){ $$('storageSetupOverlay').style.display = 'none'; if (resolveNow) readyResolve(); }
+  function hideOverlay(resolveNow){
+    if (resolveNow) {
+      // Montrer un écran de chargement au lieu d'un blanc
+      $$('storageSetupBody').innerHTML =
+        '<div style="text-align:center;padding:30px 0;">' +
+        '<div style="font-size:32px;margin-bottom:16px;">⏳</div>' +
+        '<p style="font-size:14px;color:#5E6F66;margin:0 0 8px;">Chargement de vos données…</p>' +
+        '<p style="font-size:11px;color:#94B3A6;margin:0;">Quelques secondes</p>' +
+        '</div>';
+      $$('storageCloseBtn').style.display = 'none';
+      readyResolve();
+      // L'overlay sera caché par renderAuthScreen dans le script principal
+    } else {
+      $$('storageSetupOverlay').style.display = 'none';
+    }
+  }
   function showOverlay(){ $$('storageSetupOverlay').style.display = 'flex'; $$('storageCloseBtn').style.display = isFirstRun ? 'none' : 'block'; }
 
   function label(text){ return '<label style="display:block;font-size:10.5px;font-weight:700;color:#5E6F66;text-transform:uppercase;letter-spacing:.3px;margin-bottom:4px;">'+text+'</label>'; }
@@ -93,16 +108,26 @@
       '<p style="font-size:10px;color:#5E6F66;text-align:center;margin-top:6px;">Admin : menu Compte → Paramètres de stockage</p>';
     $$('btnLocalFallback').onclick = () => { storageMode='local'; localStorage.setItem('bgs_storage_mode','local'); hideOverlay(true); };
     $$('btnConnectSimple').onclick = async () => {
-      $$('clientIdErr').textContent = 'Connexion en cours…';
+      const btn = $$('btnConnectSimple');
+      btn.disabled = true;
+      btn.textContent = '⏳ Connexion en cours…';
+      $$('clientIdErr').textContent = '';
       try {
-        await connectDrive(undefined);
+        await withTimeout(connectDrive(undefined), 120000, 'auth-timeout');
         storageMode = 'drive';
         localStorage.setItem('bgs_storage_mode','drive');
-        await driveLoadCache();
+        await withTimeout(driveLoadCache(), 20000, 'load-timeout');
         hideOverlay(true);
       } catch (err) {
-        console.error(err);
-        $$('clientIdErr').textContent = "Connexion impossible. Vérifiez que votre compte Gmail est bien autorisé sur ce fichier.";
+        console.error('BGS connect error:', err);
+        btn.disabled = false;
+        btn.textContent = 'Se connecter avec Google';
+        const msg = (err && err.message === 'auth-timeout')
+          ? 'Délai dépassé. Vérifiez que les popups ne sont pas bloqués et réessayez.'
+          : (err && err.message === 'load-timeout')
+          ? 'Données chargées avec succès. Cliquez à nouveau.'
+          : 'Connexion impossible. Vérifiez que votre compte Gmail est autorisé sur ce fichier.';
+        $$('clientIdErr').textContent = msg;
       }
     };
   }
@@ -323,25 +348,12 @@
   if (!storageMode) {
     showOverlay(); screenChoice();
   } else if (storageMode === 'drive') {
+    // Ne jamais tenter de reconnexion silencieuse dans la PWA (cause de freeze)
+    // Toujours montrer le bouton "Se connecter avec Google"
+    isFirstRun = false;
     showOverlay();
-    $$('storageSetupBody').innerHTML = '<p style="font-size:13px;color:#5E6F66;text-align:center;padding:20px 0;">Connexion à Google Drive…</p>';
-    // Timeout de sécurité : si tout échoue, on débloque quand même l'app après 15s
-    const driveTimeout = setTimeout(() => {
-      console.warn('BGS: Drive connection timeout, falling back');
-      isFirstRun = false;
-      if (BGS_CONFIG.clientId && BGS_CONFIG.fileId) screenSimpleConnect();
-      else screenClientId();
-    }, 15000);
-    connectDrive('none')
-      .then(() => driveLoadCache())
-      .then(() => { clearTimeout(driveTimeout); hideOverlay(true); })
-      .catch((err) => {
-        clearTimeout(driveTimeout);
-        isFirstRun = false;
-        console.warn('BGS: Drive reconnect failed:', err);
-        if (BGS_CONFIG.clientId && BGS_CONFIG.fileId) screenSimpleConnect();
-        else screenClientId();
-      });
+    if (BGS_CONFIG.clientId && BGS_CONFIG.fileId) screenSimpleConnect();
+    else screenClientId();
   } else {
     hideOverlay(true);
   }
@@ -955,6 +967,9 @@ table.bgs-obj-table input:focus { border-color: var(--primary); outline: none; }
 
   /* ============ AUTH ============ */
   function renderAuthScreen(){
+    // Cacher l'overlay de stockage s'il est encore visible (chargement Drive)
+    const so = document.getElementById('storageSetupOverlay');
+    if (so) so.style.display = 'none';
     $('authOverlay').style.display = 'flex';
     $('appContent').style.display = 'none';
     if (!auth) renderSetupForm(); else renderLoginForm();
