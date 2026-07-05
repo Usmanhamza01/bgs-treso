@@ -53,19 +53,13 @@
   const SCOPE = 'https://www.googleapis.com/auth/drive';
 
   function hideOverlay(resolveNow){
+    $$('storageSetupOverlay').style.display = 'none';
     if (resolveNow) {
-      // Montrer un écran de chargement au lieu d'un blanc
-      $$('storageSetupBody').innerHTML =
-        '<div style="text-align:center;padding:30px 0;">' +
-        '<div style="font-size:32px;margin-bottom:16px;">⏳</div>' +
-        '<p style="font-size:14px;color:#5E6F66;margin:0 0 8px;">Chargement de vos données…</p>' +
-        '<p style="font-size:11px;color:#94B3A6;margin:0;">Quelques secondes</p>' +
-        '</div>';
-      $$('storageCloseBtn').style.display = 'none';
       readyResolve();
-      // L'overlay sera caché par renderAuthScreen dans le script principal
-    } else {
-      $$('storageSetupOverlay').style.display = 'none';
+      // Afficher immédiatement l'overlay d'auth pour éviter l'écran blanc
+      // (renderAuthScreen le remplira avec le formulaire)
+      const ao = document.getElementById('authOverlay');
+      if (ao) ao.style.display = 'flex';
     }
   }
   function showOverlay(){ $$('storageSetupOverlay').style.display = 'flex'; $$('storageCloseBtn').style.display = isFirstRun ? 'none' : 'block'; }
@@ -967,7 +961,6 @@ table.bgs-obj-table input:focus { border-color: var(--primary); outline: none; }
 
   /* ============ AUTH ============ */
   function renderAuthScreen(){
-    // Cacher l'overlay de stockage s'il est encore visible (chargement Drive)
     const so = document.getElementById('storageSetupOverlay');
     if (so) so.style.display = 'none';
     $('authOverlay').style.display = 'flex';
